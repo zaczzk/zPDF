@@ -356,6 +356,7 @@ pub struct AppState {
     pub drag_start_scroll_y: i32,
     pub active_editor: Option<ActiveTextEditor>,
     pub edit_hwnd: HWND,
+    pub edit_font: HFONT,
     pub welcome_btn_rect: RECT,
 }
 
@@ -416,6 +417,7 @@ impl AppState {
             drag_start_scroll_y: 0,
             active_editor: None,
             edit_hwnd: ptr::null_mut(),
+            edit_font: ptr::null_mut(),
             welcome_btn_rect: RECT::default(),
         }
     }
@@ -631,6 +633,10 @@ pub fn commit_active_text_editor(state: &mut AppState) {
     }
 
     unsafe {
+        if !state.edit_font.is_null() {
+            DeleteObject(state.edit_font as HGDIOBJ);
+            state.edit_font = ptr::null_mut();
+        }
         DestroyWindow(state.edit_hwnd);
     }
     state.edit_hwnd = ptr::null_mut();
@@ -639,11 +645,15 @@ pub fn commit_active_text_editor(state: &mut AppState) {
 }
 
 pub fn cancel_active_text_editor(state: &mut AppState) {
-    if !state.edit_hwnd.is_null() {
-        unsafe {
-            DestroyWindow(state.edit_hwnd);
+    unsafe {
+        if !state.edit_font.is_null() {
+            DeleteObject(state.edit_font as HGDIOBJ);
+            state.edit_font = ptr::null_mut();
         }
-        state.edit_hwnd = ptr::null_mut();
+        if !state.edit_hwnd.is_null() {
+            DestroyWindow(state.edit_hwnd);
+            state.edit_hwnd = ptr::null_mut();
+        }
     }
     state.active_editor = None;
     state.invalidate();
@@ -697,6 +707,7 @@ fn handle_text_edit_click(state: &mut AppState, client_x: i32, client_y: i32) {
                                     to_wide_null("Segoe UI").as_ptr(),
                                 );
                                 SendMessageW(edit_ctl, WM_SETFONT, font as WPARAM, 1);
+                                state.edit_font = font;
                                 OLD_EDIT_PROC = SetWindowLongPtrW(edit_ctl, GWLP_WNDPROC, edit_subclass_proc as *const () as isize);
                                 SetFocus(edit_ctl);
                                 state.edit_hwnd = edit_ctl;

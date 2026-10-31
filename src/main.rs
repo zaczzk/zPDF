@@ -22,15 +22,17 @@ fn find_pdfium_dll() -> Option<PathBuf> {
         if let Some(parent) = exe_path.parent() {
             let candidate = parent.join("pdfium.dll");
             if candidate.exists() {
-                return Some(candidate);
+                return candidate.canonicalize().ok().or(Some(candidate));
             }
         }
     }
 
     // 2. Check current working directory
-    let cwd_candidate = PathBuf::from("pdfium.dll");
-    if cwd_candidate.exists() {
-        return Some(cwd_candidate);
+    if let Ok(cwd) = env::current_dir() {
+        let candidate = cwd.join("pdfium.dll");
+        if candidate.exists() {
+            return candidate.canonicalize().ok().or(Some(candidate));
+        }
     }
 
     // 3. Check common development or local paths
