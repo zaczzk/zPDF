@@ -18,11 +18,20 @@ Fast, tiny, zero-dependency native Rust PDF viewer & editor for Windows.
 - **Strict Supply-Chain Isolation:** Written in pure `std` Rust with zero external third-party crates and strict DLL search-order lockdown.
 
 ## Building
+
+### ARM64 (Optimized Native Windows on ARM)
 ```powershell
-cargo build --release
+cargo build --release --target aarch64-pc-windows-gnullvm
+# Output: target/aarch64-pc-windows-gnullvm/release/zpdf.exe (~277 KB)
+```
+
+### x64 (Optimized Native Windows 64-bit AMD64)
+```powershell
+cargo build --release --target x86_64-pc-windows-gnullvm
+# Output: target/x86_64-pc-windows-gnullvm/release/zpdf.exe (~321 KB)
 ```
 
 ## Running
 ```powershell
-.\target\release\zpdf.exe [path_to_pdf]
+.\zpdf.exe [path_to_pdf]
 ```
