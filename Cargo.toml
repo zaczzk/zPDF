@@ -1,0 +1,18 @@
+[package]
+name = "zpdf"
+version = "0.1.0"
+edition = "2021"
+authors = ["zaczzk"]
+description = "Fast, tiny, zero-dependency native Rust PDF viewer & editor for Windows"
+repository = "https://github.com/zaczzk/zPDF"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Strictly ZERO external dependencies.
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,9 @@
+/target/
+**/*.rs.bk
+*.pdb
+*.obj
+*.exe
+!build/**/*.exe
+.vscode/
+.idea/
+pdfium.dll
