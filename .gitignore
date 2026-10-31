@@ -7,3 +7,5 @@
 .vscode/
 .idea/
 pdfium.dll
+libunwind.dll
+dist/

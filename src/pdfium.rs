@@ -62,7 +62,7 @@ pub struct FPDF_FILEWRITE {
     pub write_block: unsafe extern "C" fn(
         p_this: *mut FPDF_FILEWRITE,
         p_data: *const c_void,
-        size: usize,
+        size: std::ffi::c_ulong,
     ) -> c_int,
 }
 
@@ -115,7 +115,7 @@ pub struct PdfiumApi {
     pub FPDF_GetPageHeightF: Option<unsafe extern "C" fn(FPDF_PAGE) -> f32>,
     pub FPDF_GetPageWidth: unsafe extern "C" fn(FPDF_PAGE) -> f64,
     pub FPDF_GetPageHeight: unsafe extern "C" fn(FPDF_PAGE) -> f64,
-    pub FPDF_GetPageRotation: unsafe extern "C" fn(FPDF_PAGE) -> c_int,
+    pub FPDFPage_GetRotation: unsafe extern "C" fn(FPDF_PAGE) -> c_int,
     pub FPDFPage_SetRotation: unsafe extern "C" fn(FPDF_PAGE, c_int),
     pub FPDFPage_Delete: unsafe extern "C" fn(FPDF_DOCUMENT, c_int),
     pub FPDFPage_New: unsafe extern "C" fn(FPDF_DOCUMENT, c_int, f64, f64) -> FPDF_PAGE,
@@ -141,8 +141,8 @@ pub struct PdfiumApi {
     pub FPDFText_GetText: unsafe extern "C" fn(FPDF_TEXTPAGE, c_int, c_int, *mut u16) -> c_int,
     pub FPDFText_FindStart: unsafe extern "C" fn(FPDF_TEXTPAGE, *const u16, c_uint, c_int) -> FPDF_SCHHANDLE,
     pub FPDFText_FindNext: unsafe extern "C" fn(FPDF_SCHHANDLE) -> c_int,
-    pub FPDFText_GetSchIdx: unsafe extern "C" fn(FPDF_SCHHANDLE) -> c_int,
-    pub FPDFText_GetSchResultCnt: unsafe extern "C" fn(FPDF_SCHHANDLE) -> c_int,
+    pub FPDFText_GetSchResultIndex: unsafe extern "C" fn(FPDF_SCHHANDLE) -> c_int,
+    pub FPDFText_GetSchCount: unsafe extern "C" fn(FPDF_SCHHANDLE) -> c_int,
     pub FPDFText_FindClose: unsafe extern "C" fn(FPDF_SCHHANDLE),
 
     // Page Objects & Editing
@@ -156,6 +156,7 @@ pub struct PdfiumApi {
 
     // Saving
     pub FPDF_SaveAsCopy: unsafe extern "C" fn(FPDF_DOCUMENT, *mut FPDF_FILEWRITE, c_int) -> c_int,
+    pub FPDF_GetLastError: unsafe extern "C" fn() -> std::ffi::c_ulong,
 }
 
 pub struct PdfiumLibrary {
@@ -221,7 +222,7 @@ impl PdfiumLibrary {
                 FPDF_GetPageHeightF: resolve_opt!(FPDF_GetPageHeightF),
                 FPDF_GetPageWidth: resolve!(FPDF_GetPageWidth),
                 FPDF_GetPageHeight: resolve!(FPDF_GetPageHeight),
-                FPDF_GetPageRotation: resolve!(FPDF_GetPageRotation),
+                FPDFPage_GetRotation: resolve!(FPDFPage_GetRotation),
                 FPDFPage_SetRotation: resolve!(FPDFPage_SetRotation),
                 FPDFPage_Delete: resolve!(FPDFPage_Delete),
                 FPDFPage_New: resolve!(FPDFPage_New),
@@ -245,8 +246,8 @@ impl PdfiumLibrary {
                 FPDFText_GetText: resolve!(FPDFText_GetText),
                 FPDFText_FindStart: resolve!(FPDFText_FindStart),
                 FPDFText_FindNext: resolve!(FPDFText_FindNext),
-                FPDFText_GetSchIdx: resolve!(FPDFText_GetSchIdx),
-                FPDFText_GetSchResultCnt: resolve!(FPDFText_GetSchResultCnt),
+                FPDFText_GetSchResultIndex: resolve!(FPDFText_GetSchResultIndex),
+                FPDFText_GetSchCount: resolve!(FPDFText_GetSchCount),
                 FPDFText_FindClose: resolve!(FPDFText_FindClose),
 
                 FPDFPage_CountObjects: resolve!(FPDFPage_CountObjects),
@@ -258,6 +259,7 @@ impl PdfiumLibrary {
                 FPDFText_SetText: resolve_opt!(FPDFText_SetText),
 
                 FPDF_SaveAsCopy: resolve!(FPDF_SaveAsCopy),
+                FPDF_GetLastError: resolve!(FPDF_GetLastError),
             };
 
             let config = FPDF_LIBRARY_CONFIG {
@@ -390,6 +392,7 @@ impl PdfDocument {
     }
 
     pub fn save_to_bytes(&self) -> Result<Vec<u8>, String> {
+        #[repr(C)]
         struct StreamWriter {
             writer: FPDF_FILEWRITE,
             buffer: Vec<u8>,
@@ -398,10 +401,10 @@ impl PdfDocument {
         unsafe extern "C" fn write_callback(
             p_this: *mut FPDF_FILEWRITE,
             p_data: *const c_void,
-            size: usize,
+            size: std::ffi::c_ulong,
         ) -> c_int {
             let stream = &mut *(p_this as *mut StreamWriter);
-            let slice = std::slice::from_raw_parts(p_data as *const u8, size);
+            let slice = std::slice::from_raw_parts(p_data as *const u8, size as usize);
             stream.buffer.extend_from_slice(slice);
             1 // success
         }
@@ -418,12 +421,13 @@ impl PdfDocument {
             (self.api.FPDF_SaveAsCopy)(
                 self.raw,
                 &mut stream.writer as *mut FPDF_FILEWRITE,
-                0x01, // FPDF_INCREMENTAL or 0
+                0, // 0 for full export
             )
         };
 
         if ok != 1 {
-            return Err("FPDF_SaveAsCopy failed to export PDF stream".to_string());
+            let err = unsafe { (self.api.FPDF_GetLastError)() };
+            return Err(format!("FPDF_SaveAsCopy failed (ok={}, error_code={})", ok, err));
         }
 
         Ok(stream.buffer)
@@ -465,7 +469,7 @@ impl PdfPage {
     }
 
     pub fn rotation(&self) -> i32 {
-        unsafe { (self.api.FPDF_GetPageRotation)(self.raw) }
+        unsafe { (self.api.FPDFPage_GetRotation)(self.raw) }
     }
 
     pub fn set_rotation(&self, rotation: i32) {
@@ -668,8 +672,8 @@ impl PdfTextPage {
 
         unsafe {
             while (self.api.FPDFText_FindNext)(handle) != 0 {
-                let start_idx = (self.api.FPDFText_GetSchIdx)(handle);
-                let count = (self.api.FPDFText_GetSchResultCnt)(handle);
+                let start_idx = (self.api.FPDFText_GetSchResultIndex)(handle);
+                let count = (self.api.FPDFText_GetSchCount)(handle);
                 if start_idx >= 0 && count > 0 {
                     let mut b_left = f32::MAX;
                     let mut b_top = f32::MIN;
