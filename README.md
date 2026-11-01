@@ -30,6 +30,12 @@
 - **No ads.**
 - **Asks once** to be your default PDF app, then never again.
 
+## What it does
+- **Opens PDFs.**
+- **Edits PDFs.**
+  - **Text** — changed in place.
+  - **Next:** images, tick/cross stamps, redaction (clear or blackline).
+
 ---
 
 ## Windows 11 Smart App Control & SmartScreen
