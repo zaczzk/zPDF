@@ -9,3 +9,5 @@
 pdfium.dll
 libunwind.dll
 dist/
+
+sample.pdf
