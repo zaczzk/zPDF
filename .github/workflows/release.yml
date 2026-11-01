@@ -26,6 +26,14 @@ jobs:
         run: |
           rustup target add ${{ matrix.target }}
 
+      - name: Version metadata consistent
+        shell: pwsh
+        run: |
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $rc = ((Select-String -Path resources.rc -Pattern 'FILEVERSION (.+)').Matches[0].Groups[1].Value -replace ',', '.')
+          if ($cargo -ne $rc) { throw "Cargo.toml ($cargo) and resources.rc ($rc) disagree" }
+          Write-Host "version $cargo (the linked resources_*.o carries the same FileVersion)"
+
       - name: Build
         run: |
           cargo build --release --locked --target ${{ matrix.target }}

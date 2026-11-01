@@ -83,5 +83,24 @@ Ensure pdfium.dll is in the same folder as zpdf.exe:
 
 ---
 
+## Code signing policy
+
+**Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).**
+
+Releases are built and signed automatically from this repository by GitHub Actions. Every signing request is approved by the maintainer before it is signed.
+
+**Team roles** — zPDF is a solo project; the maintainer holds all three roles:
+
+- Committers and reviewers: [@zaczzk](https://github.com/zaczzk)
+- Approvers: [@zaczzk](https://github.com/zaczzk)
+
+**Privacy policy** — This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it. zPDF links no network sockets and contains no telemetry.
+
+## Uninstalling
+
+zPDF is portable — there is no installer. Delete the folder you unzipped it into.
+
+---
+
 ## License
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
