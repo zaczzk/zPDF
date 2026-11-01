@@ -164,6 +164,7 @@ pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_RBUTTONDOWN: u32 = 0x0204;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_MOUSEWHEEL: u32 = 0x020A;
+pub const WM_SETICON: u32 = 0x0080;
 pub const WM_DROPFILES: u32 = 0x0233;
 pub const WM_MOUSELEAVE: u32 = 0x02A3;
 
@@ -228,6 +229,7 @@ extern "system" {
     fn SetCapture(hWnd: HWND) -> HWND;
     fn ReleaseCapture() -> i32;
     fn LoadCursorW(hInstance: HINSTANCE, lpCursorName: *const u16) -> HCURSOR;
+    fn LoadIconW(hInstance: HINSTANCE, lpIconName: *const u16) -> *mut c_void;
     fn SetCursor(hCursor: HCURSOR) -> HCURSOR;
     fn SetFocus(hWnd: HWND) -> HWND;
     fn SendMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
@@ -235,6 +237,24 @@ extern "system" {
     fn CallWindowProcW(lpPrevWndFunc: isize, hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
     fn TrackMouseEvent(lpEventTrack: *mut TRACKMOUSEEVENT) -> i32;
     fn GetKeyState(nVirtKey: i32) -> i16;
+    fn MessageBoxW(hWnd: HWND, lpText: *const u16, lpCaption: *const u16, uType: u32) -> i32;
+    fn DrawIconEx(
+        hdc: HDC,
+        xLeft: i32,
+        yTop: i32,
+        hIcon: *mut c_void,
+        cxWidth: i32,
+        cyWidth: i32,
+        istepIfAniCur: u32,
+        hbrFlickerFreeDraw: HBRUSH,
+        diFlags: u32,
+    ) -> i32;
+}
+
+pub fn show_message_box(hwnd: HWND, caption: &str, text: &str, u_type: u32) -> i32 {
+    let wide_caption = to_wide_null(caption);
+    let wide_text = to_wide_null(text);
+    unsafe { MessageBoxW(hwnd, wide_text.as_ptr(), wide_caption.as_ptr(), u_type) }
 }
 
 #[link(name = "gdi32")]
@@ -358,6 +378,7 @@ pub struct AppState {
     pub edit_hwnd: HWND,
     pub edit_font: HFONT,
     pub welcome_btn_rect: RECT,
+    pub app_icon: *mut c_void,
 }
 
 static mut GLOBAL_STATE: *mut AppState = ptr::null_mut();
@@ -391,7 +412,7 @@ unsafe extern "system" fn edit_subclass_proc(
 }
 
 impl AppState {
-    pub fn new(hwnd: HWND, pdfium: Arc<PdfiumLibrary>) -> Self {
+    pub fn new(hwnd: HWND, pdfium: Arc<PdfiumLibrary>, app_icon: *mut c_void) -> Self {
         Self {
             hwnd,
             pdfium,
@@ -419,6 +440,7 @@ impl AppState {
             edit_hwnd: ptr::null_mut(),
             edit_font: ptr::null_mut(),
             welcome_btn_rect: RECT::default(),
+            app_icon,
         }
     }
 
@@ -1129,19 +1151,23 @@ fn paint_empty_state(state: &mut AppState, hdc: HDC, width: i32, height: i32) {
 
         SetBkMode(hdc, TRANSPARENT);
 
-        // App Logo Icon Badge
-        let badge_brush = CreateSolidBrush(0x00D47800); // Accent blue #0078D4
-        let badge_rect = RECT { left: card_x + 36, top: card_y + 36, right: card_x + 92, bottom: card_y + 92 };
-        FillRect(hdc, &badge_rect, badge_brush);
-        DeleteObject(badge_brush as HGDIOBJ);
+        // App Logo Icon
+        if !state.app_icon.is_null() {
+            DrawIconEx(hdc, card_x + 36, card_y + 36, state.app_icon, 56, 56, 0, ptr::null_mut(), 0x0003);
+        } else {
+            let badge_brush = CreateSolidBrush(0x00D47800);
+            let badge_rect = RECT { left: card_x + 36, top: card_y + 36, right: card_x + 92, bottom: card_y + 92 };
+            FillRect(hdc, &badge_rect, badge_brush);
+            DeleteObject(badge_brush as HGDIOBJ);
 
-        let icon_font = CreateFontW(22, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
-        let old_f = SelectObject(hdc, icon_font as HGDIOBJ);
-        SetTextColor(hdc, 0x00FFFFFF);
-        let pdf_w = to_wide_null("PDF");
-        TextOutW(hdc, card_x + 44, card_y + 50, pdf_w.as_ptr(), (pdf_w.len() - 1) as i32);
-        SelectObject(hdc, old_f);
-        DeleteObject(icon_font as HGDIOBJ);
+            let icon_font = CreateFontW(22, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
+            let old_f = SelectObject(hdc, icon_font as HGDIOBJ);
+            SetTextColor(hdc, 0x00FFFFFF);
+            let pdf_w = to_wide_null("PDF");
+            TextOutW(hdc, card_x + 44, card_y + 50, pdf_w.as_ptr(), (pdf_w.len() - 1) as i32);
+            SelectObject(hdc, old_f);
+            DeleteObject(icon_font as HGDIOBJ);
+        }
 
         // Title Header
         let title_font = CreateFontW(28, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
@@ -1495,6 +1521,7 @@ pub fn run_gui(pdfium: Arc<PdfiumLibrary>, initial_pdf: Option<PathBuf>) -> Resu
 
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     let class_name = to_wide_null("zPDF_MainWindowClass");
+    let h_icon = unsafe { LoadIconW(instance, 1 as *const u16) };
 
     let wnd_class = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -1503,12 +1530,12 @@ pub fn run_gui(pdfium: Arc<PdfiumLibrary>, initial_pdf: Option<PathBuf>) -> Resu
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: instance,
-        hIcon: ptr::null_mut(),
+        hIcon: h_icon,
         hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
         hbrBackground: ptr::null_mut(),
         lpszMenuName: ptr::null(),
         lpszClassName: class_name.as_ptr(),
-        hIconSm: ptr::null_mut(),
+        hIconSm: h_icon,
     };
 
     unsafe {
@@ -1537,7 +1564,12 @@ pub fn run_gui(pdfium: Arc<PdfiumLibrary>, initial_pdf: Option<PathBuf>) -> Resu
             return Err("Failed to create Win32 window".to_string());
         }
 
-        let mut app_state = Box::new(AppState::new(hwnd, pdfium));
+        if !h_icon.is_null() {
+            SendMessageW(hwnd, WM_SETICON, 1, h_icon as LPARAM);
+            SendMessageW(hwnd, WM_SETICON, 0, h_icon as LPARAM);
+        }
+
+        let mut app_state = Box::new(AppState::new(hwnd, pdfium, h_icon));
         if let Some(ref path) = initial_pdf {
             let _ = app_state.open_file(path);
         }

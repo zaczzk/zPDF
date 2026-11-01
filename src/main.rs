@@ -149,6 +149,12 @@ fn main() {
             eprintln!("Error: pdfium.dll not found.");
             eprintln!("Please place 'pdfium.dll' in the same folder as zpdf.exe.");
             eprintln!("You can run 'zpdf.exe --self-test' to test the security engine.");
+            win32_gui::show_message_box(
+                std::ptr::null_mut(),
+                "zPDF — Missing Dependency",
+                "Could not find 'pdfium.dll'.\n\nPlease ensure 'pdfium.dll' is placed in the same folder as zpdf.exe to open and edit PDF files.\n\nPre-built binaries and instructions are available in the repository.",
+                0x00000010,
+            );
             std::process::exit(1);
         }
     };
@@ -156,6 +162,12 @@ fn main() {
     // Verify integrity of PDFium DLL
     if let Err(e) = verify_pdfium_integrity(&pdfium_path, None) {
         eprintln!("Security Error: {}", e);
+        win32_gui::show_message_box(
+            std::ptr::null_mut(),
+            "zPDF — Security Error",
+            &format!("PDFium DLL integrity verification failed:\n\n{}\n\nThe file may be corrupted or untrusted.", e),
+            0x00000010,
+        );
         std::process::exit(1);
     }
 
@@ -164,6 +176,12 @@ fn main() {
         Ok(lib) => Arc::new(lib),
         Err(e) => {
             eprintln!("Failed to initialize PDFium library: {}", e);
+            win32_gui::show_message_box(
+                std::ptr::null_mut(),
+                "zPDF — Initialization Error",
+                &format!("Failed to initialize PDFium library:\n\n{}", e),
+                0x00000010,
+            );
             std::process::exit(1);
         }
     };
