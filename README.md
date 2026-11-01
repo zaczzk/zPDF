@@ -25,10 +25,10 @@
 
 ---
 
-## What this app will never do
-- **No subscription.** No trial, no tiers, no renewals — there is nothing to buy, rent, or get downgraded out of.
-- **No ads.** Not in the viewer, not on launch, not in a "Pro" upsell wearing an ad's clothes.
-- **Asks once, then drops it.** One prompt to be your default PDF app. Decline, and it never brings it up again — your Windows settings are yours.
+## What this app never does
+- **No subscription.**
+- **No ads.**
+- **Asks once** to be your default PDF app, then never again.
 
 ---
 
