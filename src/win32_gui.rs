@@ -9,10 +9,11 @@ use std::ptr;
 use std::sync::Arc;
 
 use crate::editor::{
-    apply_text_mutation, hit_test_text_object, ActiveTextEditor, EditAction, ToolMode,
-    UndoManager,
+    apply_redaction, apply_text_mutation, hit_test_text_object, insert_image_object,
+    insert_stamp_checkmark, insert_stamp_cross, remove_page_object, ActiveImageGizmo,
+    ActiveTextEditor, EditAction, GizmoHandle, ToolMode, UndoManager,
 };
-use crate::pdfium::{PdfDocument, PdfiumLibrary, RectF};
+use crate::pdfium::{PdfDocument, PdfFormEnv, PdfiumLibrary, RectF};
 use crate::tile_cache::{ThumbnailCache, TileCache};
 
 // Win32 Types
@@ -196,6 +197,12 @@ pub const OPAQUE: i32 = 2;
 pub const IDC_ARROW: *const u16 = 32512 as *const u16;
 pub const IDC_IBEAM: *const u16 = 32513 as *const u16;
 pub const IDC_HAND: *const u16 = 32649 as *const u16;
+pub const IDC_CROSS: *const u16 = 32515 as *const u16;
+pub const IDC_SIZEALL: *const u16 = 32646 as *const u16;
+pub const IDC_SIZENWSE: *const u16 = 32642 as *const u16;
+pub const IDC_SIZENESW: *const u16 = 32643 as *const u16;
+pub const IDC_SIZEWE: *const u16 = 32644 as *const u16;
+pub const IDC_SIZENS: *const u16 = 32645 as *const u16;
 
 pub const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
 pub const OFN_FILEMUSTEXIST: u32 = 0x00001000;
@@ -227,6 +234,10 @@ pub enum ToolbarControl {
     Redo,
     ToolPan,
     ToolEdit,
+    ToolStampCheckmark,
+    ToolStampCross,
+    ToolImage,
+    ToolRedactBlackline,
     ZoomOut,
     ZoomReset,
     ZoomIn,
@@ -362,6 +373,7 @@ extern "system" {
     fn LineTo(hdc: HDC, x: i32, y: i32) -> i32;
     fn Polyline(hdc: HDC, apt: *const POINT, cpt: i32) -> i32;
     fn Polygon(hdc: HDC, apt: *const POINT, cpt: i32) -> i32;
+    fn Rectangle(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32) -> i32;
     fn Arc(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, xr1: i32, yr1: i32, xr2: i32, yr2: i32) -> i32;
     fn Ellipse(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32) -> i32;
     fn GetStockObject(i: i32) -> HGDIOBJ;
@@ -524,6 +536,35 @@ pub struct AppState {
     pub search_prev_rect: RECT,
     pub search_next_rect: RECT,
     pub search_close_rect: RECT,
+
+    // Backbuffer Caching
+    pub backbuffer_dc: HDC,
+    pub backbuffer_bmp: HBITMAP,
+    pub backbuffer_old_bmp: HGDIOBJ,
+    pub backbuffer_w: i32,
+    pub backbuffer_h: i32,
+
+    // AcroForms
+    pub form_env: Option<PdfFormEnv>,
+
+    // Image Gizmo & Transform
+    pub active_image_gizmo: Option<ActiveImageGizmo>,
+
+    // Redaction Drag Rect
+    pub redact_drag_rect: Option<(usize, RectF)>,
+
+    // Floating Default App Banner
+    pub show_default_app_banner: bool,
+    pub banner_rect: RECT,
+    pub banner_set_btn_rect: RECT,
+    pub banner_never_btn_rect: RECT,
+    pub banner_close_btn_rect: RECT,
+
+    // New Toolbar Action Rects
+    pub tb_stamp_v_rect: RECT,
+    pub tb_stamp_x_rect: RECT,
+    pub tb_image_rect: RECT,
+    pub tb_redact_rect: RECT,
 }
 
 static mut GLOBAL_STATE: *mut AppState = ptr::null_mut();
@@ -749,13 +790,33 @@ impl AppState {
             search_prev_rect: RECT::default(),
             search_next_rect: RECT::default(),
             search_close_rect: RECT::default(),
+            backbuffer_dc: ptr::null_mut(),
+            backbuffer_bmp: ptr::null_mut(),
+            backbuffer_old_bmp: ptr::null_mut(),
+            backbuffer_w: 0,
+            backbuffer_h: 0,
+            form_env: None,
+            active_image_gizmo: None,
+            redact_drag_rect: None,
+            show_default_app_banner: zpdf::default_app::should_prompt_default_app(),
+            banner_rect: RECT::default(),
+            banner_set_btn_rect: RECT::default(),
+            banner_never_btn_rect: RECT::default(),
+            banner_close_btn_rect: RECT::default(),
+            tb_stamp_v_rect: RECT::default(),
+            tb_stamp_x_rect: RECT::default(),
+            tb_image_rect: RECT::default(),
+            tb_redact_rect: RECT::default(),
         }
     }
 
     pub fn open_file(&mut self, path: &Path) -> Result<(), String> {
         let doc = self.pdfium.open_document(path, None)?;
+        self.form_env = doc.init_form_env();
         self.doc = Some(doc);
         self.current_file = Some(path.to_path_buf());
+        self.active_image_gizmo = None;
+        self.redact_drag_rect = None;
         self.is_dirty = false;
         self.save_toast_active = false;
         self.tile_cache.clear();
@@ -778,6 +839,8 @@ impl AppState {
         self.toolbar_height = scale_dpi(48, self.dpi);
         self.status_height = scale_dpi(26, self.dpi);
         self.sidebar_width = scale_dpi(200, self.dpi);
+        self.tile_cache.clear();
+        self.thumb_cache.clear();
         if !self.search_font.is_null() {
             unsafe {
                 DeleteObject(self.search_font as HGDIOBJ);
@@ -821,14 +884,14 @@ impl AppState {
 
         let page_count = doc.page_count();
         let scale = self.zoom_pct as f64 / 100.0;
-        let mut y = 24;
-        let gap = 24;
-
         let dpi = self.dpi;
         let s = |v: i32| scale_dpi(v, dpi);
+        let mut y = s(24);
+        let gap = s(24);
         let mut sidebar_y = s(28);
         let thumb_max_w = s(144);
         let thumb_max_h = s(160);
+        let base_scale = (self.dpi as f64) / 72.0;
 
         for i in 0..page_count {
             if let Ok(page) = doc.load_page(i) {
@@ -840,8 +903,8 @@ impl AppState {
                     (w_pt, h_pt)
                 };
 
-                let render_w = (eff_w * scale * 1.333333).round() as i32;
-                let render_h = (eff_h * scale * 1.333333).round() as i32;
+                let render_w = (eff_w * scale * base_scale).round() as i32;
+                let render_h = (eff_h * scale * base_scale).round() as i32;
 
                 self.page_layouts.push(PageLayout {
                     index: i,
@@ -963,6 +1026,62 @@ impl AppState {
             let path_str = String::from_utf16_lossy(&file_buf[..end]);
             let path = PathBuf::from(path_str);
             let _ = self.open_file(&path);
+        }
+    }
+
+    pub fn prompt_insert_image(&mut self) {
+        if self.doc.is_none() {
+            return;
+        }
+        let mut file_buf = [0u16; 1024];
+        let filter = to_wide_null("Image Files (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff\0All Files (*.*)\0*.*\0");
+        let title = to_wide_null("Insert Image");
+
+        let mut ofn: OPENFILENAMEW = unsafe { std::mem::zeroed() };
+        ofn.lStructSize = std::mem::size_of::<OPENFILENAMEW>() as u32;
+        ofn.hwndOwner = self.hwnd;
+        ofn.lpstrFilter = filter.as_ptr();
+        ofn.lpstrFile = file_buf.as_mut_ptr();
+        ofn.nMaxFile = file_buf.len() as u32;
+        ofn.lpstrTitle = title.as_ptr();
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+
+        if unsafe { GetOpenFileNameW(&mut ofn) } != 0 {
+            let end = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
+            let path_str = String::from_utf16_lossy(&file_buf[..end]);
+            let path = PathBuf::from(path_str);
+            if let Ok((raw_w, raw_h, bgra)) = zpdf::wic_decoder::decode_image_to_bgra(&path) {
+                let p_idx = self.active_page_idx;
+                let (page_w_pt, page_h_pt) = if let Some(layout) = self.page_layouts.get(p_idx) {
+                    (layout.width_pt, layout.height_pt)
+                } else {
+                    (612.0, 792.0)
+                };
+                let aspect = (raw_w as f64) / (raw_h as f64).max(1.0);
+                let mut w_pt = 200.0;
+                let mut h_pt = w_pt / aspect;
+                if h_pt > 250.0 {
+                    h_pt = 250.0;
+                    w_pt = h_pt * aspect;
+                }
+                let page_x = (page_w_pt - w_pt) / 2.0;
+                let page_y = (page_h_pt - h_pt) / 2.0;
+                self.active_image_gizmo = Some(ActiveImageGizmo {
+                    page_index: p_idx,
+                    object_index: None,
+                    page_x,
+                    page_y,
+                    width_pt: w_pt,
+                    height_pt: h_pt,
+                    raw_width_px: raw_w,
+                    raw_height_px: raw_h,
+                    bgra_pixels: bgra,
+                    dragging_handle: None,
+                    drag_start_mouse: (0, 0),
+                    original_bounds: (page_x, page_y, w_pt, h_pt),
+                });
+                self.invalidate();
+            }
         }
     }
 
@@ -1444,6 +1563,16 @@ pub fn handle_undo(state: &mut AppState) {
                 state.invalidate();
             }
         }
+        EditAction::InsertStamp { page_index, object_index } | EditAction::InsertImage { page_index, object_index } => {
+            if let Some(doc) = &state.doc {
+                let _ = remove_page_object(doc, page_index, object_index);
+                state.is_dirty = true;
+                state.tile_cache.invalidate_page(page_index);
+                state.thumb_cache.invalidate(page_index);
+                state.update_title();
+                state.invalidate();
+            }
+        }
         _ => {}
     }
 }
@@ -1486,6 +1615,130 @@ pub fn handle_redo(state: &mut AppState) {
             }
         }
         _ => {}
+    }
+}
+
+pub fn hit_test_gizmo_handle(state: &AppState, client_x: i32, client_y: i32) -> Option<GizmoHandle> {
+    let gizmo = state.active_image_gizmo.as_ref()?;
+    let doc = state.doc.as_ref()?;
+    let layout = state.page_layouts.get(gizmo.page_index)?;
+    let page = doc.load_page(gizmo.page_index).ok()?;
+    let rot = page.rotation();
+
+    let avail_w = state.viewport_width - state.sidebar_width;
+    let page_screen_x = if avail_w > layout.render_w {
+        state.sidebar_width + (avail_w - layout.render_w) / 2
+    } else {
+        state.sidebar_width + 24 - state.scroll_x
+    };
+    let page_screen_y = state.toolbar_height - state.scroll_y + layout.y_offset;
+
+    let min_x_pt = gizmo.page_x;
+    let max_x_pt = gizmo.page_x + gizmo.width_pt;
+    let min_y_pt = gizmo.page_y;
+    let max_y_pt = gizmo.page_y + gizmo.height_pt;
+
+    let p_bl = page.page_to_device(0, 0, layout.render_w, layout.render_h, rot, min_x_pt, min_y_pt)?;
+    let p_tr = page.page_to_device(0, 0, layout.render_w, layout.render_h, rot, max_x_pt, max_y_pt)?;
+
+    let min_dev_x = page_screen_x + p_bl.0.min(p_tr.0);
+    let max_dev_x = page_screen_x + p_bl.0.max(p_tr.0);
+    let min_dev_y = page_screen_y + p_bl.1.min(p_tr.1);
+    let max_dev_y = page_screen_y + p_bl.1.max(p_tr.1);
+
+    let mid_dev_x = (min_dev_x + max_dev_x) / 2;
+    let mid_dev_y = (min_dev_y + max_dev_y) / 2;
+
+    let hit_r = scale_dpi(8, state.dpi);
+    let near = |px: i32, py: i32| -> bool {
+        (client_x - px).abs() <= hit_r && (client_y - py).abs() <= hit_r
+    };
+
+    if near(min_dev_x, min_dev_y) {
+        Some(GizmoHandle::TopLeft)
+    } else if near(max_dev_x, min_dev_y) {
+        Some(GizmoHandle::TopRight)
+    } else if near(min_dev_x, max_dev_y) {
+        Some(GizmoHandle::BottomLeft)
+    } else if near(max_dev_x, max_dev_y) {
+        Some(GizmoHandle::BottomRight)
+    } else if near(mid_dev_x, min_dev_y) {
+        Some(GizmoHandle::TopCenter)
+    } else if near(mid_dev_x, max_dev_y) {
+        Some(GizmoHandle::BottomCenter)
+    } else if near(min_dev_x, mid_dev_y) {
+        Some(GizmoHandle::MiddleLeft)
+    } else if near(max_dev_x, mid_dev_y) {
+        Some(GizmoHandle::MiddleRight)
+    } else if client_x >= min_dev_x && client_x <= max_dev_x && client_y >= min_dev_y && client_y <= max_dev_y {
+        Some(GizmoHandle::Move)
+    } else {
+        None
+    }
+}
+
+pub fn commit_active_image_gizmo(state: &mut AppState) {
+    if let Some(gizmo) = state.active_image_gizmo.take() {
+        if let Some(doc) = &state.doc {
+            if let Ok(new_idx) = insert_image_object(
+                doc,
+                gizmo.page_index,
+                gizmo.raw_width_px,
+                gizmo.raw_height_px,
+                gizmo.bgra_pixels.clone(),
+                gizmo.page_x,
+                gizmo.page_y,
+                gizmo.width_pt,
+                gizmo.height_pt,
+            ) {
+                state.undo_manager.push(EditAction::InsertImage {
+                    page_index: gizmo.page_index,
+                    object_index: new_idx,
+                });
+                state.is_dirty = true;
+                state.tile_cache.invalidate_page(gizmo.page_index);
+                state.thumb_cache.invalidate(gizmo.page_index);
+                state.update_title();
+                state.invalidate();
+            }
+        }
+    }
+}
+
+pub fn cancel_active_image_gizmo(state: &mut AppState) {
+    if state.active_image_gizmo.take().is_some() {
+        state.invalidate();
+    }
+}
+
+pub fn insert_stamp_at_center(state: &mut AppState, checkmark: bool) {
+    let Some(doc) = &state.doc else { return };
+    let page_idx = state.active_page_idx;
+    let (w_pt, h_pt) = if let Some(layout) = state.page_layouts.get(page_idx) {
+        (layout.width_pt, layout.height_pt)
+    } else {
+        (612.0, 792.0)
+    };
+    let center_x = w_pt / 2.0;
+    let center_y = h_pt / 2.0;
+    let size_pt = 48.0;
+
+    let res = if checkmark {
+        insert_stamp_checkmark(doc, page_idx, center_x, center_y, size_pt)
+    } else {
+        insert_stamp_cross(doc, page_idx, center_x, center_y, size_pt)
+    };
+
+    if let Ok(new_idx) = res {
+        state.undo_manager.push(EditAction::InsertStamp {
+            page_index: page_idx,
+            object_index: new_idx,
+        });
+        state.is_dirty = true;
+        state.tile_cache.invalidate_page(page_idx);
+        state.thumb_cache.invalidate(page_idx);
+        state.update_title();
+        state.invalidate();
     }
 }
 
@@ -2703,6 +2956,211 @@ unsafe fn draw_vector_status_dot(hdc: HDC, cx: i32, cy: i32, dpi: u32, is_dirty:
         SelectObject(hdc, old_p);
         SelectObject(hdc, old_b);
         DeleteObject(pen as HGDIOBJ);
+    }
+}
+
+unsafe fn draw_vector_checkmark(hdc: HDC, cx: i32, cy: i32, dpi: u32, color: COLORREF) {
+    let s = |v: i32| scale_dpi(v, dpi);
+    let pen_w = s(2).max(1);
+    let pen = CreatePen(0, pen_w, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let pts = [
+        POINT { x: cx - s(5), y: cy },
+        POINT { x: cx - s(1), y: cy + s(4) },
+        POINT { x: cx + s(5), y: cy - s(4) },
+    ];
+    Polyline(hdc, pts.as_ptr(), pts.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_cross(hdc: HDC, cx: i32, cy: i32, dpi: u32, color: COLORREF) {
+    let s = |v: i32| scale_dpi(v, dpi);
+    let pen_w = s(2).max(1);
+    let pen = CreatePen(0, pen_w, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let d1 = [
+        POINT { x: cx - s(4), y: cy - s(4) },
+        POINT { x: cx + s(4), y: cy + s(4) },
+    ];
+    Polyline(hdc, d1.as_ptr(), d1.len() as i32);
+
+    let d2 = [
+        POINT { x: cx + s(4), y: cy - s(4) },
+        POINT { x: cx - s(4), y: cy + s(4) },
+    ];
+    Polyline(hdc, d2.as_ptr(), d2.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_image_icon(hdc: HDC, cx: i32, cy: i32, dpi: u32, color: COLORREF) {
+    let s = |v: i32| scale_dpi(v, dpi);
+    let pen_w = s(1).max(1);
+    let pen = CreatePen(0, pen_w, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let frame = [
+        POINT { x: cx - s(6), y: cy - s(5) },
+        POINT { x: cx + s(6), y: cy - s(5) },
+        POINT { x: cx + s(6), y: cy + s(5) },
+        POINT { x: cx - s(6), y: cy + s(5) },
+        POINT { x: cx - s(6), y: cy - s(5) },
+    ];
+    Polyline(hdc, frame.as_ptr(), frame.len() as i32);
+
+    let m1 = [
+        POINT { x: cx - s(5), y: cy + s(3) },
+        POINT { x: cx - s(2), y: cy - s(1) },
+        POINT { x: cx + s(2), y: cy + s(3) },
+    ];
+    Polyline(hdc, m1.as_ptr(), m1.len() as i32);
+
+    let m2 = [
+        POINT { x: cx,        y: cy + s(3) },
+        POINT { x: cx + s(3), y: cy },
+        POINT { x: cx + s(5), y: cy + s(3) },
+    ];
+    Polyline(hdc, m2.as_ptr(), m2.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_redact_icon(hdc: HDC, cx: i32, cy: i32, dpi: u32, color: COLORREF) {
+    let s = |v: i32| scale_dpi(v, dpi);
+    let pen_w = s(1).max(1);
+    let pen = CreatePen(0, pen_w, color);
+    let brush = CreateSolidBrush(color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+    let old_b = SelectObject(hdc, brush as HGDIOBJ);
+
+    RoundRect(hdc, cx - s(6), cy - s(3), cx + s(6), cy + s(3), s(2), s(2));
+
+    SelectObject(hdc, old_b);
+    SelectObject(hdc, old_pen);
+    DeleteObject(brush as HGDIOBJ);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+fn paint_default_app_banner(state: &mut AppState, hdc: HDC, width: i32) {
+    let dpi = state.dpi;
+    let s = |v: i32| scale_dpi(v, dpi);
+
+    let card_w = s(540).min(width - s(32));
+    let card_h = s(38);
+    let card_x = (width - card_w) / 2;
+    let card_y = state.toolbar_height + s(8);
+
+    state.banner_rect = RECT {
+        left: card_x,
+        top: card_y,
+        right: card_x + card_w,
+        bottom: card_y + card_h,
+    };
+
+    unsafe {
+        // Drop shadow behind floating banner
+        let shadow = RECT {
+            left: card_x + s(2),
+            top: card_y + s(2),
+            right: card_x + card_w + s(2),
+            bottom: card_y + card_h + s(2),
+        };
+        let shadow_brush = CreateSolidBrush(rgb(0x06, 0x06, 0x0A));
+        let shadow_pen = CreatePen(0, 1, rgb(0x06, 0x06, 0x0A));
+        let old_b = SelectObject(hdc, shadow_brush as HGDIOBJ);
+        let old_p = SelectObject(hdc, shadow_pen as HGDIOBJ);
+        RoundRect(hdc, shadow.left, shadow.top, shadow.right, shadow.bottom, s(8), s(8));
+        SelectObject(hdc, old_b);
+        SelectObject(hdc, old_p);
+        DeleteObject(shadow_brush as HGDIOBJ);
+        DeleteObject(shadow_pen as HGDIOBJ);
+
+        // Container card (#1B1B26 with #333348 border)
+        let bg_brush = CreateSolidBrush(rgb(0x1B, 0x1B, 0x26));
+        let border_pen = CreatePen(0, 1, rgb(0x33, 0x33, 0x48));
+        let old_b = SelectObject(hdc, bg_brush as HGDIOBJ);
+        let old_p = SelectObject(hdc, border_pen as HGDIOBJ);
+        RoundRect(hdc, card_x, card_y, card_x + card_w, card_y + card_h, s(8), s(8));
+        SelectObject(hdc, old_b);
+        SelectObject(hdc, old_p);
+        DeleteObject(bg_brush as HGDIOBJ);
+        DeleteObject(border_pen as HGDIOBJ);
+
+        SetBkMode(hdc, TRANSPARENT);
+        let font = create_ui_font(9.5, 500, dpi);
+        let old_f = SelectObject(hdc, font as HGDIOBJ);
+
+        // Text prompt
+        SetTextColor(hdc, rgb(0xED, 0xED, 0xF0));
+        let prompt_text = to_wide_null("Set zPDF as your default PDF viewer?");
+        let text_cy = card_y + (card_h - s(14)) / 2;
+        TextOutW(hdc, card_x + s(14), text_cy, prompt_text.as_ptr(), (prompt_text.len() - 1) as i32);
+
+        // Buttons on right: [Set as Default] [Never] [✕]
+        let close_w = s(24);
+        let never_w = s(56);
+        let set_w = s(104);
+        let btn_h = s(26);
+        let btn_y = card_y + (card_h - btn_h) / 2;
+
+        state.banner_close_btn_rect = RECT {
+            left: card_x + card_w - s(8) - close_w,
+            top: btn_y,
+            right: card_x + card_w - s(8),
+            bottom: btn_y + btn_h,
+        };
+        state.banner_never_btn_rect = RECT {
+            left: state.banner_close_btn_rect.left - s(6) - never_w,
+            top: btn_y,
+            right: state.banner_close_btn_rect.left - s(6),
+            bottom: btn_y + btn_h,
+        };
+        state.banner_set_btn_rect = RECT {
+            left: state.banner_never_btn_rect.left - s(6) - set_w,
+            top: btn_y,
+            right: state.banner_never_btn_rect.left - s(6),
+            bottom: btn_y + btn_h,
+        };
+
+        // 1. "Set as Default" (Accent Blue #2563EB)
+        let set_brush = CreateSolidBrush(rgb(0x25, 0x63, 0xEB));
+        let set_pen = CreatePen(0, 1, rgb(0x3B, 0x82, 0xF6));
+        let old_b2 = SelectObject(hdc, set_brush as HGDIOBJ);
+        let old_p2 = SelectObject(hdc, set_pen as HGDIOBJ);
+        RoundRect(hdc, state.banner_set_btn_rect.left, state.banner_set_btn_rect.top, state.banner_set_btn_rect.right, state.banner_set_btn_rect.bottom, s(6), s(6));
+        SelectObject(hdc, old_b2);
+        SelectObject(hdc, old_p2);
+        DeleteObject(set_brush as HGDIOBJ);
+        DeleteObject(set_pen as HGDIOBJ);
+        SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+        let set_text = to_wide_null("Set as Default");
+        TextOutW(hdc, state.banner_set_btn_rect.left + s(10), text_cy, set_text.as_ptr(), (set_text.len() - 1) as i32);
+
+        // 2. "Never" button
+        let never_brush = CreateSolidBrush(rgb(0x24, 0x24, 0x32));
+        let never_pen = CreatePen(0, 1, rgb(0x33, 0x33, 0x48));
+        let old_b3 = SelectObject(hdc, never_brush as HGDIOBJ);
+        let old_p3 = SelectObject(hdc, never_pen as HGDIOBJ);
+        RoundRect(hdc, state.banner_never_btn_rect.left, state.banner_never_btn_rect.top, state.banner_never_btn_rect.right, state.banner_never_btn_rect.bottom, s(6), s(6));
+        SelectObject(hdc, old_b3);
+        SelectObject(hdc, old_p3);
+        DeleteObject(never_brush as HGDIOBJ);
+        DeleteObject(never_pen as HGDIOBJ);
+        SetTextColor(hdc, rgb(0xC0, 0xC0, 0xD0));
+        let never_text = to_wide_null("Never");
+        TextOutW(hdc, state.banner_never_btn_rect.left + s(12), text_cy, never_text.as_ptr(), (never_text.len() - 1) as i32);
+
+        // 3. Close "✕" icon
+        draw_vector_close(hdc, (state.banner_close_btn_rect.left + state.banner_close_btn_rect.right) / 2, card_y + card_h / 2, dpi, rgb(0x90, 0x90, 0xA0));
+
+        SelectObject(hdc, old_f);
+        DeleteObject(font as HGDIOBJ);
     }
 }
 

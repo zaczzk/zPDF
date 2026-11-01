@@ -39,6 +39,46 @@ pub const FPDF_PAGEOBJ_IMAGE: c_int = 3;
 pub const FPDF_PAGEOBJ_SHADING: c_int = 4;
 pub const FPDF_PAGEOBJ_FORMS: c_int = 5;
 
+pub type FPDF_FORMHANDLE = *mut c_void;
+pub type FPDF_BOOL = c_int;
+
+pub const FPDF_FILLMODE_NONE: c_int = 0;
+pub const FPDF_FILLMODE_ALTERNATE: c_int = 1;
+pub const FPDF_FILLMODE_WINDING: c_int = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FPDF_SYSTEMTIME {
+    pub wYear: u16,
+    pub wMonth: u16,
+    pub wDayOfWeek: u16,
+    pub wDay: u16,
+    pub wHour: u16,
+    pub wMinute: u16,
+    pub wSecond: u16,
+    pub wMilliseconds: u16,
+}
+
+#[repr(C)]
+pub struct FPDF_FORMFILLINFO {
+    pub version: c_int,
+    pub Release: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO)>,
+    pub FFI_Invalidate: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, FPDF_PAGE, f64, f64, f64, f64)>,
+    pub FFI_OutputSelectedRect: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, FPDF_PAGE, f64, f64, f64, f64)>,
+    pub FFI_SetCursor: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, c_int)>,
+    pub FFI_SetTimer: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, c_int, Option<unsafe extern "C" fn(c_int)>) -> c_int>,
+    pub FFI_KillTimer: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, c_int)>,
+    pub FFI_GetLocalTime: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO) -> FPDF_SYSTEMTIME>,
+    pub FFI_OnChange: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO)>,
+    pub FFI_GetPage: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, FPDF_DOCUMENT, c_int) -> FPDF_PAGE>,
+    pub FFI_GetCurrentPage: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, FPDF_DOCUMENT) -> FPDF_PAGE>,
+    pub FFI_GetRotation: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, FPDF_PAGE) -> c_int>,
+    pub FFI_ExecuteNamedAction: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, *const c_char)>,
+    pub FFI_SetTextFieldFocus: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, *const u16, u32, FPDF_BOOL)>,
+    pub FFI_DoURIAction: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, *const c_char)>,
+    pub FFI_DoGoToAction: Option<unsafe extern "C" fn(*mut FPDF_FORMFILLINFO, c_int, c_int, *mut f32, c_int)>,
+}
+
 // Bitmap formats
 pub const FPDFBitmap_Gray: c_int = 1;
 pub const FPDFBitmap_BGR: c_int = 2;
@@ -159,6 +199,38 @@ pub struct PdfiumApi {
     pub FPDFPageObj_Transform: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, f64, f64, f64, f64, f64, f64)>,
     pub FPDFPage_InsertObject: Option<unsafe extern "C" fn(FPDF_PAGE, FPDF_PAGEOBJECT)>,
 
+    // AcroForms & Form Filling
+    pub FPDFDOC_InitFormFillEnvironment: Option<unsafe extern "C" fn(FPDF_DOCUMENT, *mut FPDF_FORMFILLINFO) -> FPDF_FORMHANDLE>,
+    pub FPDFDOC_ExitFormFillEnvironment: Option<unsafe extern "C" fn(FPDF_FORMHANDLE)>,
+    pub FORM_DoDocumentJSAction: Option<unsafe extern "C" fn(FPDF_FORMHANDLE)>,
+    pub FORM_DoDocumentOpenAction: Option<unsafe extern "C" fn(FPDF_FORMHANDLE)>,
+    pub FORM_OnLButtonDown: Option<unsafe extern "C" fn(FPDF_FORMHANDLE, FPDF_PAGE, c_int, f64, f64) -> FPDF_BOOL>,
+    pub FORM_OnLButtonUp: Option<unsafe extern "C" fn(FPDF_FORMHANDLE, FPDF_PAGE, c_int, f64, f64) -> FPDF_BOOL>,
+    pub FORM_OnMouseMove: Option<unsafe extern "C" fn(FPDF_FORMHANDLE, FPDF_PAGE, c_int, f64, f64) -> FPDF_BOOL>,
+    pub FORM_OnKeyDown: Option<unsafe extern "C" fn(FPDF_FORMHANDLE, FPDF_PAGE, c_int, c_int) -> FPDF_BOOL>,
+    pub FORM_OnKeyUp: Option<unsafe extern "C" fn(FPDF_FORMHANDLE, FPDF_PAGE, c_int, c_int) -> FPDF_BOOL>,
+    pub FORM_OnChar: Option<unsafe extern "C" fn(FPDF_FORMHANDLE, FPDF_PAGE, c_int, c_int) -> FPDF_BOOL>,
+    pub FPDF_FFLDraw: Option<unsafe extern "C" fn(FPDF_FORMHANDLE, FPDF_BITMAP, FPDF_PAGE, c_int, c_int, c_int, c_int, c_int, c_int)>,
+
+    // Image & Vector Path Objects
+    pub FPDFPageObj_NewImageObj: Option<unsafe extern "C" fn(FPDF_DOCUMENT) -> FPDF_PAGEOBJECT>,
+    pub FPDFImageObj_SetBitmap: Option<unsafe extern "C" fn(*mut FPDF_PAGE, c_int, FPDF_PAGEOBJECT, FPDF_BITMAP) -> FPDF_BOOL>,
+    pub FPDFImageObj_SetMatrix: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, f64, f64, f64, f64, f64, f64) -> FPDF_BOOL>,
+    pub FPDFImageObj_LoadJpegFile: Option<unsafe extern "C" fn(*mut FPDF_PAGE, c_int, FPDF_PAGEOBJECT, *mut c_void) -> FPDF_BOOL>,
+    pub FPDFPageObj_CreateNewPath: Option<unsafe extern "C" fn(f32, f32) -> FPDF_PAGEOBJECT>,
+    pub FPDFPath_MoveTo: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, f32, f32) -> FPDF_BOOL>,
+    pub FPDFPath_LineTo: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, f32, f32) -> FPDF_BOOL>,
+    pub FPDFPath_BezierTo: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, f32, f32, f32, f32, f32, f32) -> FPDF_BOOL>,
+    pub FPDFPath_Close: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT) -> FPDF_BOOL>,
+    pub FPDFPath_SetDrawMode: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, c_int, FPDF_BOOL) -> FPDF_BOOL>,
+    pub FPDFPageObj_SetFillColor: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, c_uint, c_uint, c_uint, c_uint) -> FPDF_BOOL>,
+    pub FPDFPageObj_SetStrokeColor: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, c_uint, c_uint, c_uint, c_uint) -> FPDF_BOOL>,
+    pub FPDFPageObj_SetStrokeWidth: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, f32) -> FPDF_BOOL>,
+
+    // Object Removal & Destruction
+    pub FPDFPage_RemoveObject: Option<unsafe extern "C" fn(FPDF_PAGE, FPDF_PAGEOBJECT) -> FPDF_BOOL>,
+    pub FPDFPageObj_Destroy: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT)>,
+
     // Device Coordinate Conversions
     pub FPDF_DeviceToPage: Option<unsafe extern "C" fn(FPDF_PAGE, c_int, c_int, c_int, c_int, c_int, c_int, c_int, *mut f64, *mut f64) -> c_int>,
     pub FPDF_PageToDevice: Option<unsafe extern "C" fn(FPDF_PAGE, c_int, c_int, c_int, c_int, c_int, f64, f64, *mut c_int, *mut c_int) -> c_int>,
@@ -274,6 +346,35 @@ impl PdfiumLibrary {
                 FPDF_DeviceToPage: resolve_opt!(FPDF_DeviceToPage),
                 FPDF_PageToDevice: resolve_opt!(FPDF_PageToDevice),
 
+                FPDFDOC_InitFormFillEnvironment: resolve_opt!(FPDFDOC_InitFormFillEnvironment),
+                FPDFDOC_ExitFormFillEnvironment: resolve_opt!(FPDFDOC_ExitFormFillEnvironment),
+                FORM_DoDocumentJSAction: resolve_opt!(FORM_DoDocumentJSAction),
+                FORM_DoDocumentOpenAction: resolve_opt!(FORM_DoDocumentOpenAction),
+                FORM_OnLButtonDown: resolve_opt!(FORM_OnLButtonDown),
+                FORM_OnLButtonUp: resolve_opt!(FORM_OnLButtonUp),
+                FORM_OnMouseMove: resolve_opt!(FORM_OnMouseMove),
+                FORM_OnKeyDown: resolve_opt!(FORM_OnKeyDown),
+                FORM_OnKeyUp: resolve_opt!(FORM_OnKeyUp),
+                FORM_OnChar: resolve_opt!(FORM_OnChar),
+                FPDF_FFLDraw: resolve_opt!(FPDF_FFLDraw),
+
+                FPDFPageObj_NewImageObj: resolve_opt!(FPDFPageObj_NewImageObj),
+                FPDFImageObj_SetBitmap: resolve_opt!(FPDFImageObj_SetBitmap),
+                FPDFImageObj_SetMatrix: resolve_opt!(FPDFImageObj_SetMatrix),
+                FPDFImageObj_LoadJpegFile: resolve_opt!(FPDFImageObj_LoadJpegFile),
+                FPDFPageObj_CreateNewPath: resolve_opt!(FPDFPageObj_CreateNewPath),
+                FPDFPath_MoveTo: resolve_opt!(FPDFPath_MoveTo),
+                FPDFPath_LineTo: resolve_opt!(FPDFPath_LineTo),
+                FPDFPath_BezierTo: resolve_opt!(FPDFPath_BezierTo),
+                FPDFPath_Close: resolve_opt!(FPDFPath_Close),
+                FPDFPath_SetDrawMode: resolve_opt!(FPDFPath_SetDrawMode),
+                FPDFPageObj_SetFillColor: resolve_opt!(FPDFPageObj_SetFillColor),
+                FPDFPageObj_SetStrokeColor: resolve_opt!(FPDFPageObj_SetStrokeColor),
+                FPDFPageObj_SetStrokeWidth: resolve_opt!(FPDFPageObj_SetStrokeWidth),
+
+                FPDFPage_RemoveObject: resolve_opt!(FPDFPage_RemoveObject),
+                FPDFPageObj_Destroy: resolve_opt!(FPDFPageObj_Destroy),
+
                 FPDF_SaveAsCopy: resolve!(FPDF_SaveAsCopy),
                 FPDF_GetLastError: resolve!(FPDF_GetLastError),
             };
@@ -340,11 +441,93 @@ use std::os::windows::ffi::OsStrExt;
 // Safe Document RAII
 pub struct PdfDocument {
     pub raw: FPDF_DOCUMENT,
-    api: Arc<PdfiumApi>,
+    pub api: Arc<PdfiumApi>,
 }
 
 unsafe impl Send for PdfDocument {}
 unsafe impl Sync for PdfDocument {}
+
+pub struct PdfFormEnv {
+    pub raw: FPDF_FORMHANDLE,
+    _form_info: Box<FPDF_FORMFILLINFO>,
+    api: Arc<PdfiumApi>,
+}
+
+unsafe impl Send for PdfFormEnv {}
+unsafe impl Sync for PdfFormEnv {}
+
+impl Drop for PdfFormEnv {
+    fn drop(&mut self) {
+        if !self.raw.is_null() {
+            if let Some(exit_fn) = self.api.FPDFDOC_ExitFormFillEnvironment {
+                unsafe { exit_fn(self.raw) };
+            }
+            self.raw = ptr::null_mut();
+        }
+    }
+}
+
+impl PdfFormEnv {
+    pub fn do_document_js_action(&self) {
+        if let Some(js_fn) = self.api.FORM_DoDocumentJSAction {
+            unsafe { js_fn(self.raw) };
+        }
+    }
+
+    pub fn do_document_open_action(&self) {
+        if let Some(open_fn) = self.api.FORM_DoDocumentOpenAction {
+            unsafe { open_fn(self.raw) };
+        }
+    }
+
+    pub fn on_lbutton_down(&self, page: &PdfPage, modifier: i32, page_x: f64, page_y: f64) -> bool {
+        if let Some(btn_down) = self.api.FORM_OnLButtonDown {
+            unsafe { btn_down(self.raw, page.raw, modifier as c_int, page_x, page_y) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn on_lbutton_up(&self, page: &PdfPage, modifier: i32, page_x: f64, page_y: f64) -> bool {
+        if let Some(btn_up) = self.api.FORM_OnLButtonUp {
+            unsafe { btn_up(self.raw, page.raw, modifier as c_int, page_x, page_y) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn on_mouse_move(&self, page: &PdfPage, modifier: i32, page_x: f64, page_y: f64) -> bool {
+        if let Some(mm_fn) = self.api.FORM_OnMouseMove {
+            unsafe { mm_fn(self.raw, page.raw, modifier as c_int, page_x, page_y) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn on_key_down(&self, page: &PdfPage, key_code: i32, modifier: i32) -> bool {
+        if let Some(kd_fn) = self.api.FORM_OnKeyDown {
+            unsafe { kd_fn(self.raw, page.raw, key_code as c_int, modifier as c_int) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn on_key_up(&self, page: &PdfPage, key_code: i32, modifier: i32) -> bool {
+        if let Some(ku_fn) = self.api.FORM_OnKeyUp {
+            unsafe { ku_fn(self.raw, page.raw, key_code as c_int, modifier as c_int) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn on_char(&self, page: &PdfPage, char_code: i32, modifier: i32) -> bool {
+        if let Some(char_fn) = self.api.FORM_OnChar {
+            unsafe { char_fn(self.raw, page.raw, char_code as c_int, modifier as c_int) != 0 }
+        } else {
+            false
+        }
+    }
+}
 
 impl Drop for PdfDocument {
     fn drop(&mut self) {
@@ -424,6 +607,68 @@ impl PdfDocument {
         }
     }
 
+    pub fn create_image_object(&self) -> Option<PdfPageObject> {
+        let creator = self.api.FPDFPageObj_NewImageObj?;
+        let obj = unsafe { creator(self.raw) };
+        if obj.is_null() {
+            None
+        } else {
+            Some(PdfPageObject {
+                raw: obj,
+                api: Arc::clone(&self.api),
+            })
+        }
+    }
+
+    pub fn create_path(&self, x: f32, y: f32) -> Option<PdfPageObject> {
+        let creator = self.api.FPDFPageObj_CreateNewPath?;
+        let obj = unsafe { creator(x, y) };
+        if obj.is_null() {
+            None
+        } else {
+            Some(PdfPageObject {
+                raw: obj,
+                api: Arc::clone(&self.api),
+            })
+        }
+    }
+
+    pub fn init_form_env(&self) -> Option<PdfFormEnv> {
+        let init_fn = self.api.FPDFDOC_InitFormFillEnvironment?;
+        let mut form_info = Box::new(FPDF_FORMFILLINFO {
+            version: 1,
+            Release: None,
+            FFI_Invalidate: None,
+            FFI_OutputSelectedRect: None,
+            FFI_SetCursor: None,
+            FFI_SetTimer: None,
+            FFI_KillTimer: None,
+            FFI_GetLocalTime: None,
+            FFI_OnChange: None,
+            FFI_GetPage: None,
+            FFI_GetCurrentPage: None,
+            FFI_GetRotation: None,
+            FFI_ExecuteNamedAction: None,
+            FFI_SetTextFieldFocus: None,
+            FFI_DoURIAction: None,
+            FFI_DoGoToAction: None,
+        });
+
+        let handle = unsafe { init_fn(self.raw, form_info.as_mut() as *mut FPDF_FORMFILLINFO) };
+        if handle.is_null() {
+            None
+        } else {
+            let env = PdfFormEnv {
+                raw: handle,
+                _form_info: form_info,
+                api: Arc::clone(&self.api),
+            };
+            env.do_document_open_action();
+            env.do_document_js_action();
+            Some(env)
+        }
+    }
+
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         let bytes = self.save_to_bytes()?;
         let mut file = File::create(path).map_err(|e| format!("Failed to create output file: {}", e))?;
@@ -477,7 +722,7 @@ impl PdfDocument {
 // Safe Page RAII
 pub struct PdfPage {
     pub raw: FPDF_PAGE,
-    api: Arc<PdfiumApi>,
+    pub api: Arc<PdfiumApi>,
     pub index: usize,
 }
 
@@ -538,6 +783,14 @@ impl PdfPage {
         })
     }
 
+    pub fn remove_object(&self, obj: &PdfPageObject) -> bool {
+        if let Some(remover) = self.api.FPDFPage_RemoveObject {
+            unsafe { remover(self.raw, obj.raw) != 0 }
+        } else {
+            false
+        }
+    }
+
     /// Render page into an allocated BGRA byte buffer.
     pub fn render_into_buffer(
         &self,
@@ -547,6 +800,19 @@ impl PdfPage {
         stride: i32,
         rotate: i32,
         flags: i32,
+    ) -> Result<(), String> {
+        self.render_into_buffer_ex(buffer, width, height, stride, rotate, flags, None)
+    }
+
+    pub fn render_into_buffer_ex(
+        &self,
+        buffer: &mut [u8],
+        width: i32,
+        height: i32,
+        stride: i32,
+        rotate: i32,
+        flags: i32,
+        form_handle: Option<FPDF_FORMHANDLE>,
     ) -> Result<(), String> {
         let required = (stride * height) as usize;
         if buffer.len() < required {
@@ -578,6 +844,22 @@ impl PdfPage {
                 rotate,
                 flags | FPDF_ANNOT | FPDF_LCD_TEXT,
             );
+
+            if let Some(h_form) = form_handle {
+                if let Some(draw_fn) = self.api.FPDF_FFLDraw {
+                    draw_fn(
+                        h_form,
+                        bitmap,
+                        self.raw,
+                        0,
+                        0,
+                        width,
+                        height,
+                        rotate,
+                        flags | FPDF_ANNOT,
+                    );
+                }
+            }
 
             (self.api.FPDFBitmap_Destroy)(bitmap);
         }
@@ -921,6 +1203,93 @@ impl PdfPageObject {
     pub fn transform(&self, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) {
         if let Some(transformer) = self.api.FPDFPageObj_Transform {
             unsafe { transformer(self.raw, a, b, c, d, e, f) };
+        }
+    }
+
+    pub fn destroy(self) {
+        if let Some(destroy_fn) = self.api.FPDFPageObj_Destroy {
+            unsafe { destroy_fn(self.raw) };
+        }
+    }
+
+    pub fn path_move_to(&self, x: f32, y: f32) -> bool {
+        if let Some(f) = self.api.FPDFPath_MoveTo {
+            unsafe { f(self.raw, x, y) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn path_line_to(&self, x: f32, y: f32) -> bool {
+        if let Some(f) = self.api.FPDFPath_LineTo {
+            unsafe { f(self.raw, x, y) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn path_bezier_to(&self, x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32) -> bool {
+        if let Some(f) = self.api.FPDFPath_BezierTo {
+            unsafe { f(self.raw, x1, y1, x2, y2, x3, y3) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn path_close(&self) -> bool {
+        if let Some(f) = self.api.FPDFPath_Close {
+            unsafe { f(self.raw) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn path_set_draw_mode(&self, fill_mode: i32, stroke: bool) -> bool {
+        if let Some(f) = self.api.FPDFPath_SetDrawMode {
+            unsafe { f(self.raw, fill_mode as c_int, if stroke { 1 } else { 0 }) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn set_fill_color(&self, r: u8, g: u8, b: u8, a: u8) -> bool {
+        if let Some(f) = self.api.FPDFPageObj_SetFillColor {
+            unsafe { f(self.raw, r as u32, g as u32, b as u32, a as u32) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn set_stroke_color(&self, r: u8, g: u8, b: u8, a: u8) -> bool {
+        if let Some(f) = self.api.FPDFPageObj_SetStrokeColor {
+            unsafe { f(self.raw, r as u32, g as u32, b as u32, a as u32) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn set_stroke_width(&self, width: f32) -> bool {
+        if let Some(f) = self.api.FPDFPageObj_SetStrokeWidth {
+            unsafe { f(self.raw, width) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn set_image_bitmap(&self, pages: &mut [FPDF_PAGE], bitmap: FPDF_BITMAP) -> bool {
+        if let Some(f) = self.api.FPDFImageObj_SetBitmap {
+            let p_ptr = if pages.is_empty() { ptr::null_mut() } else { pages.as_mut_ptr() };
+            unsafe { f(p_ptr, pages.len() as c_int, self.raw, bitmap) != 0 }
+        } else {
+            false
+        }
+    }
+
+    pub fn set_image_matrix(&self, a: f64, b: f64, c: f64, d: f64, e: f64, f_coord: f64) -> bool {
+        if let Some(m_fn) = self.api.FPDFImageObj_SetMatrix {
+            unsafe { m_fn(self.raw, a, b, c, d, e, f_coord) != 0 }
+        } else {
+            false
         }
     }
 }

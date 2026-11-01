@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub use zpdf::{default_app, wic_decoder};
+
 mod editor;
 mod pdfium;
 mod security;

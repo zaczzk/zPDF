@@ -110,15 +110,15 @@ impl TileCache {
         let key = (page_index, zoom_pct, rotation);
         let size = pixels.len();
 
-        // Evict if over budget
-        while self.current_bytes + size > self.max_bytes && !self.entries.is_empty() {
-            self.evict_lru();
-        }
-
-        // If key already existed, remove its old size
+        // If key already existed, remove its old size FIRST to prevent premature LRU eviction
         if let Some(old) = self.entries.remove(&key) {
             self.current_bytes = self.current_bytes.saturating_sub(old.byte_size());
             self.pool.release(old.pixels);
+        }
+
+        // Evict if over budget
+        while self.current_bytes + size > self.max_bytes && !self.entries.is_empty() {
+            self.evict_lru();
         }
 
         let tick = self.tick();
@@ -177,31 +177,56 @@ impl TileCache {
     }
 }
 
-/// Lightweight cache for left sidebar page thumbnails.
+/// Lightweight LRU cache for left sidebar page thumbnails capped at 64 entries.
 pub struct ThumbnailCache {
     thumbnails: HashMap<usize, (i32, i32, Vec<u8>)>,
+    lru_order: Vec<usize>,
+    max_entries: usize,
 }
 
 impl ThumbnailCache {
     pub fn new() -> Self {
         Self {
             thumbnails: HashMap::new(),
+            lru_order: Vec::new(),
+            max_entries: 64,
         }
     }
 
-    pub fn get(&self, page_index: usize) -> Option<&(i32, i32, Vec<u8>)> {
-        self.thumbnails.get(&page_index)
+    pub fn get(&mut self, page_index: usize) -> Option<&(i32, i32, Vec<u8>)> {
+        if self.thumbnails.contains_key(&page_index) {
+            if let Some(pos) = self.lru_order.iter().position(|&x| x == page_index) {
+                let elem = self.lru_order.remove(pos);
+                self.lru_order.push(elem);
+            }
+            self.thumbnails.get(&page_index)
+        } else {
+            None
+        }
     }
 
     pub fn insert(&mut self, page_index: usize, width: i32, height: i32, pixels: Vec<u8>) {
+        if self.thumbnails.contains_key(&page_index) {
+            if let Some(pos) = self.lru_order.iter().position(|&x| x == page_index) {
+                self.lru_order.remove(pos);
+            }
+        } else {
+            while self.thumbnails.len() >= self.max_entries && !self.lru_order.is_empty() {
+                let oldest = self.lru_order.remove(0);
+                self.thumbnails.remove(&oldest);
+            }
+        }
         self.thumbnails.insert(page_index, (width, height, pixels));
+        self.lru_order.push(page_index);
     }
 
     pub fn invalidate(&mut self, page_index: usize) {
         self.thumbnails.remove(&page_index);
+        self.lru_order.retain(|&x| x != page_index);
     }
 
     pub fn clear(&mut self) {
         self.thumbnails.clear();
+        self.lru_order.clear();
     }
 }
