@@ -356,6 +356,13 @@ extern "system" {
     fn FrameRect(hdc: HDC, lprc: *const RECT, hbr: HBRUSH) -> i32;
     fn CreatePen(iStyle: i32, cWidth: i32, color: COLORREF) -> HPEN;
     fn RoundRect(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, width: i32, height: i32) -> i32;
+    fn MoveToEx(hdc: HDC, x: i32, y: i32, lppt: *mut POINT) -> i32;
+    fn LineTo(hdc: HDC, x: i32, y: i32) -> i32;
+    fn Polyline(hdc: HDC, apt: *const POINT, cpt: i32) -> i32;
+    fn Polygon(hdc: HDC, apt: *const POINT, cpt: i32) -> i32;
+    fn Arc(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32, xr1: i32, yr1: i32, xr2: i32, yr2: i32) -> i32;
+    fn Ellipse(hdc: HDC, left: i32, top: i32, right: i32, bottom: i32) -> i32;
+    fn GetStockObject(i: i32) -> HGDIOBJ;
     fn CreateFontW(
         cHeight: i32,
         cWidth: i32,
@@ -2266,8 +2273,9 @@ fn paint_empty_state(state: &mut AppState, hdc: HDC, width: i32, height: i32) {
         let btn_font = CreateFontW(14, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
         let old_f2 = SelectObject(hdc, btn_font as HGDIOBJ);
         SetTextColor(hdc, rgb(0xED, 0xED, 0xF0));
+        draw_vector_open(hdc, btn_x + 36, btn_y + 18, rgb(0xED, 0xED, 0xF0));
         let open_w = to_wide_null("Open File");
-        TextOutW(hdc, btn_x + 44, btn_y + 8, open_w.as_ptr(), (open_w.len() - 1) as i32);
+        TextOutW(hdc, btn_x + 50, btn_y + 8, open_w.as_ptr(), (open_w.len() - 1) as i32);
         SelectObject(hdc, old_f2);
         DeleteObject(btn_font as HGDIOBJ);
 
@@ -2281,8 +2289,303 @@ fn paint_empty_state(state: &mut AppState, hdc: HDC, width: i32, height: i32) {
     }
 }
 
+// ==========================================
+// Pixel-Perfect Pure GDI Vector Icon Helpers
+// ==========================================
+
+const NULL_BRUSH: i32 = 5;
+
+unsafe fn draw_vector_undo(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 2, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    // Arch curving from bottom-right (cx+5, cy+4) up and over to left
+    let arch_pts = [
+        POINT { x: cx + 5, y: cy + 4 },
+        POINT { x: cx + 5, y: cy },
+        POINT { x: cx + 3, y: cy - 4 },
+        POINT { x: cx,     y: cy - 6 },
+        POINT { x: cx - 4, y: cy - 6 },
+    ];
+    Polyline(hdc, arch_pts.as_ptr(), arch_pts.len() as i32);
+
+    // Prominent arrowhead pointing left
+    let arrow_pts = [
+        POINT { x: cx - 2, y: cy - 10 },
+        POINT { x: cx - 7, y: cy - 6 },
+        POINT { x: cx - 2, y: cy - 2 },
+    ];
+    Polyline(hdc, arrow_pts.as_ptr(), arrow_pts.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_redo(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 2, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    // Arch curving from bottom-left (cx-5, cy+4) up and over to right
+    let arch_pts = [
+        POINT { x: cx - 5, y: cy + 4 },
+        POINT { x: cx - 5, y: cy },
+        POINT { x: cx - 3, y: cy - 4 },
+        POINT { x: cx,     y: cy - 6 },
+        POINT { x: cx + 4, y: cy - 6 },
+    ];
+    Polyline(hdc, arch_pts.as_ptr(), arch_pts.len() as i32);
+
+    // Prominent arrowhead pointing right
+    let arrow_pts = [
+        POINT { x: cx + 2, y: cy - 10 },
+        POINT { x: cx + 7, y: cy - 6 },
+        POINT { x: cx + 2, y: cy - 2 },
+    ];
+    Polyline(hdc, arrow_pts.as_ptr(), arrow_pts.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_open(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 1, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let folder_outline = [
+        POINT { x: cx - 6, y: cy + 5 },
+        POINT { x: cx - 6, y: cy - 4 },
+        POINT { x: cx - 2, y: cy - 4 },
+        POINT { x: cx,     y: cy - 2 },
+        POINT { x: cx + 6, y: cy - 2 },
+        POINT { x: cx + 6, y: cy + 5 },
+        POINT { x: cx - 6, y: cy + 5 },
+    ];
+    Polyline(hdc, folder_outline.as_ptr(), folder_outline.len() as i32);
+
+    let flap = [
+        POINT { x: cx - 6, y: cy },
+        POINT { x: cx + 6, y: cy },
+    ];
+    Polyline(hdc, flap.as_ptr(), flap.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_save(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 1, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let disk_outline = [
+        POINT { x: cx - 6, y: cy - 6 },
+        POINT { x: cx + 3, y: cy - 6 },
+        POINT { x: cx + 6, y: cy - 3 },
+        POINT { x: cx + 6, y: cy + 6 },
+        POINT { x: cx - 6, y: cy + 6 },
+        POINT { x: cx - 6, y: cy - 6 },
+    ];
+    Polyline(hdc, disk_outline.as_ptr(), disk_outline.len() as i32);
+
+    let shutter = [
+        POINT { x: cx - 3, y: cy - 6 },
+        POINT { x: cx - 3, y: cy - 2 },
+        POINT { x: cx + 2, y: cy - 2 },
+        POINT { x: cx + 2, y: cy - 6 },
+    ];
+    Polyline(hdc, shutter.as_ptr(), shutter.len() as i32);
+
+    let label = [
+        POINT { x: cx - 4, y: cy + 2 },
+        POINT { x: cx + 4, y: cy + 2 },
+        POINT { x: cx + 4, y: cy + 6 },
+        POINT { x: cx - 4, y: cy + 6 },
+        POINT { x: cx - 4, y: cy + 2 },
+    ];
+    Polyline(hdc, label.as_ptr(), label.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_hand(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 1, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let hand_pts = [
+        POINT { x: cx - 3, y: cy + 6 },
+        POINT { x: cx + 4, y: cy + 6 },
+        POINT { x: cx + 5, y: cy + 2 },
+        POINT { x: cx + 6, y: cy - 2 },
+        POINT { x: cx + 4, y: cy - 2 },
+        POINT { x: cx + 4, y: cy - 5 },
+        POINT { x: cx + 2, y: cy - 5 },
+        POINT { x: cx + 2, y: cy - 7 },
+        POINT { x: cx,     y: cy - 7 },
+        POINT { x: cx,     y: cy - 5 },
+        POINT { x: cx - 2, y: cy - 5 },
+        POINT { x: cx - 3, y: cy - 1 },
+        POINT { x: cx - 6, y: cy + 1 },
+        POINT { x: cx - 6, y: cy + 3 },
+        POINT { x: cx - 3, y: cy + 6 },
+    ];
+    Polyline(hdc, hand_pts.as_ptr(), hand_pts.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_pen(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 1, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let pen_outline = [
+        POINT { x: cx - 5, y: cy + 5 },
+        POINT { x: cx - 5, y: cy + 2 },
+        POINT { x: cx + 2, y: cy - 5 },
+        POINT { x: cx + 5, y: cy - 2 },
+        POINT { x: cx - 2, y: cy + 5 },
+        POINT { x: cx - 5, y: cy + 5 },
+    ];
+    Polyline(hdc, pen_outline.as_ptr(), pen_outline.len() as i32);
+
+    let cap_line = [
+        POINT { x: cx + 1, y: cy - 4 },
+        POINT { x: cx + 4, y: cy - 1 },
+    ];
+    Polyline(hdc, cap_line.as_ptr(), cap_line.len() as i32);
+
+    let nib_split = [
+        POINT { x: cx - 5, y: cy + 5 },
+        POINT { x: cx - 2, y: cy + 2 },
+    ];
+    Polyline(hdc, nib_split.as_ptr(), nib_split.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_search(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 2, color);
+    let null_brush = GetStockObject(NULL_BRUSH);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+    let old_brush = SelectObject(hdc, null_brush);
+
+    Ellipse(hdc, cx - 6, cy - 6, cx + 3, cy + 3);
+
+    let handle_pts = [
+        POINT { x: cx + 1, y: cy + 1 },
+        POINT { x: cx + 6, y: cy + 6 },
+    ];
+    Polyline(hdc, handle_pts.as_ptr(), handle_pts.len() as i32);
+
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_minus(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 2, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let pts = [
+        POINT { x: cx - 4, y: cy },
+        POINT { x: cx + 5, y: cy },
+    ];
+    Polyline(hdc, pts.as_ptr(), pts.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_plus(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 2, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let h_pts = [
+        POINT { x: cx - 4, y: cy },
+        POINT { x: cx + 5, y: cy },
+    ];
+    Polyline(hdc, h_pts.as_ptr(), h_pts.len() as i32);
+
+    let v_pts = [
+        POINT { x: cx, y: cy - 4 },
+        POINT { x: cx, y: cy + 5 },
+    ];
+    Polyline(hdc, v_pts.as_ptr(), v_pts.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_chevron(hdc: HDC, cx: i32, cy: i32, is_up: bool, color: COLORREF) {
+    let pen = CreatePen(0, 2, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let pts = if is_up {
+        [
+            POINT { x: cx - 4, y: cy + 2 },
+            POINT { x: cx,     y: cy - 2 },
+            POINT { x: cx + 4, y: cy + 2 },
+        ]
+    } else {
+        [
+            POINT { x: cx - 4, y: cy - 2 },
+            POINT { x: cx,     y: cy + 2 },
+            POINT { x: cx + 4, y: cy - 2 },
+        ]
+    };
+    Polyline(hdc, pts.as_ptr(), pts.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_close(hdc: HDC, cx: i32, cy: i32, color: COLORREF) {
+    let pen = CreatePen(0, 2, color);
+    let old_pen = SelectObject(hdc, pen as HGDIOBJ);
+
+    let d1 = [
+        POINT { x: cx - 3, y: cy - 3 },
+        POINT { x: cx + 4, y: cy + 4 },
+    ];
+    Polyline(hdc, d1.as_ptr(), d1.len() as i32);
+
+    let d2 = [
+        POINT { x: cx + 3, y: cy - 3 },
+        POINT { x: cx - 4, y: cy + 4 },
+    ];
+    Polyline(hdc, d2.as_ptr(), d2.len() as i32);
+
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen as HGDIOBJ);
+}
+
+unsafe fn draw_vector_status_dot(hdc: HDC, cx: i32, cy: i32, is_dirty: bool, is_toast: bool) {
+    if is_toast || !is_dirty {
+        let brush = CreateSolidBrush(rgb(0x10, 0xB9, 0x81));
+        let pen = CreatePen(0, 1, rgb(0x10, 0xB9, 0x81));
+        let old_b = SelectObject(hdc, brush as HGDIOBJ);
+        let old_p = SelectObject(hdc, pen as HGDIOBJ);
+        Ellipse(hdc, cx - 3, cy - 3, cx + 4, cy + 4);
+        SelectObject(hdc, old_b);
+        SelectObject(hdc, old_p);
+        DeleteObject(brush as HGDIOBJ);
+        DeleteObject(pen as HGDIOBJ);
+    } else {
+        let pen = CreatePen(0, 1, rgb(0xF5, 0x9E, 0x0B));
+        let null_brush = GetStockObject(NULL_BRUSH);
+        let old_p = SelectObject(hdc, pen as HGDIOBJ);
+        let old_b = SelectObject(hdc, null_brush);
+        Ellipse(hdc, cx - 3, cy - 3, cx + 4, cy + 4);
+        SelectObject(hdc, old_p);
+        SelectObject(hdc, old_b);
+        DeleteObject(pen as HGDIOBJ);
+    }
+}
+
 fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
     let tb_height = state.toolbar_height; // 46px
+    let cy = tb_height / 2; // 23px vertical center
 
     // 1. Background: Deep Obsidian #121216
     let tb_rect = RECT { left: 0, top: 0, right: width, bottom: tb_height };
@@ -2304,7 +2607,7 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
         SetBkMode(hdc, TRANSPARENT);
 
         // ==========================================
-        // LEFT ZONE: Brand & Compact Action Buttons
+        // LEFT ZONE: Brand & Action Buttons
         // ==========================================
         // Brand Icon (20x20)
         if !state.app_icon.is_null() {
@@ -2322,62 +2625,104 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
 
         // Brand hairline separator
         let sep_brush = CreateSolidBrush(rgb(0x28, 0x28, 0x34));
-        let brand_sep = RECT { left: 82, top: 12, right: 83, bottom: tb_height - 12 };
+        let brand_sep = RECT { left: 84, top: 12, right: 85, bottom: tb_height - 12 };
         FillRect(hdc, &brand_sep, sep_brush);
         DeleteObject(sep_brush as HGDIOBJ);
 
         // Left Action Buttons: Open, Save, Undo, Redo
-        state.tb_open_rect = RECT { left: 92, top: 8, right: 144, bottom: tb_height - 8 };
-        state.tb_save_rect = RECT { left: 148, top: 8, right: 198, bottom: tb_height - 8 };
-        state.tb_undo_rect = RECT { left: 204, top: 8, right: 236, bottom: tb_height - 8 };
-        state.tb_redo_rect = RECT { left: 240, top: 8, right: 272, bottom: tb_height - 8 };
+        state.tb_open_rect = RECT { left: 94, top: 8, right: 154, bottom: tb_height - 8 };
+        state.tb_save_rect = RECT { left: 158, top: 8, right: 218, bottom: tb_height - 8 };
+        state.tb_undo_rect = RECT { left: 224, top: 8, right: 258, bottom: tb_height - 8 };
+        state.tb_redo_rect = RECT { left: 262, top: 8, right: 296, bottom: tb_height - 8 };
 
-        let action_font = CreateFontW(13, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
-        let old_af = SelectObject(hdc, action_font as HGDIOBJ);
+        let btn_font = CreateFontW(13, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
+        let old_bf = SelectObject(hdc, btn_font as HGDIOBJ);
 
-        let left_buttons = [
-            (state.tb_open_rect, "Open", ToolbarControl::Open, 10),
-            (state.tb_save_rect, "Save", ToolbarControl::Save, 11),
-            (state.tb_undo_rect, "↶", ToolbarControl::Undo, 10),
-            (state.tb_redo_rect, "↷", ToolbarControl::Redo, 10),
-        ];
+        // 1. Open Button (Vector Folder + Text)
+        let is_open_hover = state.hovered_control == Some(ToolbarControl::Open);
+        let open_color = if is_open_hover {
+            let hb = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.tb_open_rect.left, state.tb_open_rect.top, state.tb_open_rect.right, state.tb_open_rect.bottom, 6, 6);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        draw_vector_open(hdc, 109, cy, open_color);
+        SetTextColor(hdc, open_color);
+        let open_w = to_wide_null("Open");
+        TextOutW(hdc, 122, 15, open_w.as_ptr(), (open_w.len() - 1) as i32);
 
-        for (rc, label, ctrl, pad_x) in left_buttons {
-            let is_hovered = state.hovered_control == Some(ctrl);
-            if is_hovered {
-                let hover_brush = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
-                let old_b = SelectObject(hdc, hover_brush as HGDIOBJ);
-                RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
-                SelectObject(hdc, old_b);
-                DeleteObject(hover_brush as HGDIOBJ);
-                SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
-            } else {
-                SetTextColor(hdc, rgb(0xC0, 0xC0, 0xC8));
-            }
-            let w_label = to_wide_null(label);
-            TextOutW(hdc, rc.left + pad_x, rc.top + 7, w_label.as_ptr(), (w_label.len() - 1) as i32);
-        }
-        SelectObject(hdc, old_af);
-        DeleteObject(action_font as HGDIOBJ);
+        // 2. Save Button (Vector Floppy + Text)
+        let is_save_hover = state.hovered_control == Some(ToolbarControl::Save);
+        let save_color = if is_save_hover {
+            let hb = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.tb_save_rect.left, state.tb_save_rect.top, state.tb_save_rect.right, state.tb_save_rect.bottom, 6, 6);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        draw_vector_save(hdc, 173, cy, save_color);
+        SetTextColor(hdc, save_color);
+        let save_w = to_wide_null("Save");
+        TextOutW(hdc, 185, 15, save_w.as_ptr(), (save_w.len() - 1) as i32);
+
+        // 3. Undo Button (Crisp Centered 16px Vector Curved Arrow)
+        let is_undo_hover = state.hovered_control == Some(ToolbarControl::Undo);
+        let undo_color = if is_undo_hover {
+            let hb = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.tb_undo_rect.left, state.tb_undo_rect.top, state.tb_undo_rect.right, state.tb_undo_rect.bottom, 6, 6);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        draw_vector_undo(hdc, (state.tb_undo_rect.left + state.tb_undo_rect.right) / 2, cy, undo_color);
+
+        // 4. Redo Button (Crisp Centered 16px Vector Curved Arrow)
+        let is_redo_hover = state.hovered_control == Some(ToolbarControl::Redo);
+        let redo_color = if is_redo_hover {
+            let hb = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.tb_redo_rect.left, state.tb_redo_rect.top, state.tb_redo_rect.right, state.tb_redo_rect.bottom, 6, 6);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        draw_vector_redo(hdc, (state.tb_redo_rect.left + state.tb_redo_rect.right) / 2, cy, redo_color);
+
+        SelectObject(hdc, old_bf);
+        DeleteObject(btn_font as HGDIOBJ);
 
         // ==========================================
         // RIGHT ZONE: Segmented Tools, Zoom & Search
         // ==========================================
-        // Right-aligned from right margin (width - 16)
-        state.tb_search_rect = RECT { left: width - 50, top: 8, right: width - 16, bottom: tb_height - 8 };
+        // Search Button: [ 🔍 ] (width: 32px)
+        state.tb_search_rect = RECT { left: width - 46, top: 8, right: width - 14, bottom: tb_height - 8 };
 
-        // Zoom cluster: [ - ] 100% [ + ]
-        state.tb_zoom_in_rect = RECT { left: width - 84, top: 8, right: width - 56, bottom: tb_height - 8 };
-        state.tb_zoom_reset_rect = RECT { left: width - 138, top: 8, right: width - 88, bottom: tb_height - 8 };
-        state.tb_zoom_out_rect = RECT { left: width - 170, top: 8, right: width - 142, bottom: tb_height - 8 };
+        // Zoom Cluster: [ − | 100% | + ] (width: 124px)
+        let zoom_left = width - 176;
+        let zoom_right = width - 52;
+        state.tb_zoom_out_rect = RECT { left: zoom_left, top: 8, right: zoom_left + 30, bottom: tb_height - 8 };
+        state.tb_zoom_reset_rect = RECT { left: zoom_left + 30, top: 8, right: zoom_right - 30, bottom: tb_height - 8 };
+        state.tb_zoom_in_rect = RECT { left: zoom_right - 30, top: 8, right: zoom_right, bottom: tb_height - 8 };
 
-        // Segmented Tool Pill: [ Hand | Edit ]
-        let tool_pill_w = 118;
-        let tool_pill_left = width - 170 - 16 - tool_pill_w;
-        state.tb_hand_rect = RECT { left: tool_pill_left, top: 8, right: tool_pill_left + 58, bottom: tb_height - 8 };
-        state.tb_edit_rect = RECT { left: tool_pill_left + 60, top: 8, right: tool_pill_left + tool_pill_w, bottom: tb_height - 8 };
+        // Segmented Tool Pill: [ Hand | Edit ] (width: 144px)
+        let tool_pill_w = 144;
+        let tool_pill_left = zoom_left - 14 - tool_pill_w;
+        state.tb_hand_rect = RECT { left: tool_pill_left, top: 8, right: tool_pill_left + 72, bottom: tb_height - 8 };
+        state.tb_edit_rect = RECT { left: tool_pill_left + 72, top: 8, right: tool_pill_left + tool_pill_w, bottom: tb_height - 8 };
 
-        // Draw Tool Pill Container
+        // 1. Draw Tool Pill Container
         let tool_bg = CreateSolidBrush(rgb(0x19, 0x19, 0x22));
         let tool_pen = CreatePen(0, 1, rgb(0x28, 0x28, 0x34));
         let old_b = SelectObject(hdc, tool_bg as HGDIOBJ);
@@ -2394,8 +2739,8 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
         let is_pan = state.tool_mode == ToolMode::Pan;
         let is_edit = state.tool_mode == ToolMode::EditTextObject;
 
-        // Render Hand button
-        if is_pan {
+        // Render Hand Tool Segment
+        let hand_color = if is_pan {
             let active_brush = CreateSolidBrush(rgb(0x2C, 0x36, 0x4A));
             let active_pen = CreatePen(0, 1, rgb(0x3B, 0x82, 0xF6));
             let old_b = SelectObject(hdc, active_brush as HGDIOBJ);
@@ -2405,22 +2750,24 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
             SelectObject(hdc, old_p);
             DeleteObject(active_brush as HGDIOBJ);
             DeleteObject(active_pen as HGDIOBJ);
-            SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+            rgb(0xFF, 0xFF, 0xFF)
         } else if state.hovered_control == Some(ToolbarControl::ToolPan) {
             let hover_brush = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
             let old_b = SelectObject(hdc, hover_brush as HGDIOBJ);
             RoundRect(hdc, state.tb_hand_rect.left + 1, state.tb_hand_rect.top + 1, state.tb_hand_rect.right - 1, state.tb_hand_rect.bottom - 1, 6, 6);
             SelectObject(hdc, old_b);
             DeleteObject(hover_brush as HGDIOBJ);
-            SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+            rgb(0xFF, 0xFF, 0xFF)
         } else {
-            SetTextColor(hdc, rgb(0x90, 0x90, 0x9A));
-        }
-        let w_hand = to_wide_null("✋ Hand");
-        TextOutW(hdc, state.tb_hand_rect.left + 6, state.tb_hand_rect.top + 7, w_hand.as_ptr(), (w_hand.len() - 1) as i32);
+            rgb(0x90, 0x90, 0x9A)
+        };
+        draw_vector_hand(hdc, tool_pill_left + 22, cy, hand_color);
+        SetTextColor(hdc, hand_color);
+        let w_hand = to_wide_null("Hand");
+        TextOutW(hdc, tool_pill_left + 34, 15, w_hand.as_ptr(), (w_hand.len() - 1) as i32);
 
-        // Render Edit button
-        if is_edit {
+        // Render Edit Tool Segment
+        let edit_color = if is_edit {
             let active_brush = CreateSolidBrush(rgb(0x2C, 0x36, 0x4A));
             let active_pen = CreatePen(0, 1, rgb(0x3B, 0x82, 0xF6));
             let old_b = SelectObject(hdc, active_brush as HGDIOBJ);
@@ -2430,46 +2777,90 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
             SelectObject(hdc, old_p);
             DeleteObject(active_brush as HGDIOBJ);
             DeleteObject(active_pen as HGDIOBJ);
-            SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+            rgb(0xFF, 0xFF, 0xFF)
         } else if state.hovered_control == Some(ToolbarControl::ToolEdit) {
             let hover_brush = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
             let old_b = SelectObject(hdc, hover_brush as HGDIOBJ);
             RoundRect(hdc, state.tb_edit_rect.left + 1, state.tb_edit_rect.top + 1, state.tb_edit_rect.right - 1, state.tb_edit_rect.bottom - 1, 6, 6);
             SelectObject(hdc, old_b);
             DeleteObject(hover_brush as HGDIOBJ);
-            SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+            rgb(0xFF, 0xFF, 0xFF)
         } else {
-            SetTextColor(hdc, rgb(0x90, 0x90, 0x9A));
-        }
-        let w_edit = to_wide_null("✍ Edit");
-        TextOutW(hdc, state.tb_edit_rect.left + 8, state.tb_edit_rect.top + 7, w_edit.as_ptr(), (w_edit.len() - 1) as i32);
+            rgb(0x90, 0x90, 0x9A)
+        };
+        draw_vector_pen(hdc, tool_pill_left + 94, cy, edit_color);
+        SetTextColor(hdc, edit_color);
+        let w_edit = to_wide_null("Edit");
+        TextOutW(hdc, tool_pill_left + 106, 15, w_edit.as_ptr(), (w_edit.len() - 1) as i32);
 
-        // Zoom Buttons: [-], 100%, [+]
-        let zoom_buttons = [
-            (state.tb_zoom_out_rect, "−", ToolbarControl::ZoomOut, 9),
-            (state.tb_zoom_reset_rect, "100%", ToolbarControl::ZoomReset, 8),
-            (state.tb_zoom_in_rect, "+", ToolbarControl::ZoomIn, 9),
-        ];
+        // 2. Draw Zoom Segmented Cluster Container
+        let z_bg = CreateSolidBrush(rgb(0x19, 0x19, 0x22));
+        let z_pen = CreatePen(0, 1, rgb(0x28, 0x28, 0x34));
+        let old_zb = SelectObject(hdc, z_bg as HGDIOBJ);
+        let old_zp = SelectObject(hdc, z_pen as HGDIOBJ);
+        RoundRect(hdc, zoom_left, 8, zoom_right, tb_height - 8, 8, 8);
+        SelectObject(hdc, old_zb);
+        SelectObject(hdc, old_zp);
+        DeleteObject(z_bg as HGDIOBJ);
+        DeleteObject(z_pen as HGDIOBJ);
 
-        for (rc, label, ctrl, pad_x) in zoom_buttons {
-            let hovered = state.hovered_control == Some(ctrl);
-            if hovered {
-                let hover_brush = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
-                let old_b = SelectObject(hdc, hover_brush as HGDIOBJ);
-                RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
-                SelectObject(hdc, old_b);
-                DeleteObject(hover_brush as HGDIOBJ);
-                SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
-            } else {
-                SetTextColor(hdc, rgb(0xC0, 0xC0, 0xC8));
-            }
-            let w_lbl = to_wide_null(label);
-            TextOutW(hdc, rc.left + pad_x, rc.top + 7, w_lbl.as_ptr(), (w_lbl.len() - 1) as i32);
-        }
+        // Inner vertical hairline dividers
+        let div_brush = CreateSolidBrush(rgb(0x28, 0x28, 0x34));
+        let div1 = RECT { left: state.tb_zoom_reset_rect.left, top: 13, right: state.tb_zoom_reset_rect.left + 1, bottom: tb_height - 13 };
+        let div2 = RECT { left: state.tb_zoom_reset_rect.right - 1, top: 13, right: state.tb_zoom_reset_rect.right, bottom: tb_height - 13 };
+        FillRect(hdc, &div1, div_brush);
+        FillRect(hdc, &div2, div_brush);
+        DeleteObject(div_brush as HGDIOBJ);
 
-        // Search Button: [ 🔍 ]
+        // Zoom Out Button
+        let is_zo_hover = state.hovered_control == Some(ToolbarControl::ZoomOut);
+        let zo_color = if is_zo_hover {
+            let hb = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.tb_zoom_out_rect.left + 1, state.tb_zoom_out_rect.top + 1, state.tb_zoom_out_rect.right - 1, state.tb_zoom_out_rect.bottom - 1, 6, 6);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        draw_vector_minus(hdc, (state.tb_zoom_out_rect.left + state.tb_zoom_out_rect.right) / 2, cy, zo_color);
+
+        // Zoom Reset / Percentage Display
+        let is_zr_hover = state.hovered_control == Some(ToolbarControl::ZoomReset);
+        let zr_color = if is_zr_hover {
+            let hb = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.tb_zoom_reset_rect.left + 1, state.tb_zoom_reset_rect.top + 1, state.tb_zoom_reset_rect.right - 1, state.tb_zoom_reset_rect.bottom - 1, 6, 6);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        SetTextColor(hdc, zr_color);
+        let pct_str = format!("{}%", state.zoom_pct);
+        let w_pct = to_wide_null(&pct_str);
+        let pct_x = state.tb_zoom_reset_rect.left + (state.tb_zoom_reset_rect.right - state.tb_zoom_reset_rect.left - (pct_str.len() as i32 * 7)) / 2;
+        TextOutW(hdc, pct_x, 15, w_pct.as_ptr(), (w_pct.len() - 1) as i32);
+
+        // Zoom In Button
+        let is_zi_hover = state.hovered_control == Some(ToolbarControl::ZoomIn);
+        let zi_color = if is_zi_hover {
+            let hb = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.tb_zoom_in_rect.left + 1, state.tb_zoom_in_rect.top + 1, state.tb_zoom_in_rect.right - 1, state.tb_zoom_in_rect.bottom - 1, 6, 6);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        draw_vector_plus(hdc, (state.tb_zoom_in_rect.left + state.tb_zoom_in_rect.right) / 2, cy, zi_color);
+
+        // 3. Search Button: [ 🔍 ]
         let is_search_hovered = state.hovered_control == Some(ToolbarControl::SearchToggle);
-        if state.search_open {
+        let search_btn_color = if state.search_open {
             let active_brush = CreateSolidBrush(rgb(0x2C, 0x36, 0x4A));
             let active_pen = CreatePen(0, 1, rgb(0x3B, 0x82, 0xF6));
             let old_b = SelectObject(hdc, active_brush as HGDIOBJ);
@@ -2479,19 +2870,18 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
             SelectObject(hdc, old_p);
             DeleteObject(active_brush as HGDIOBJ);
             DeleteObject(active_pen as HGDIOBJ);
-            SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+            rgb(0xFF, 0xFF, 0xFF)
         } else if is_search_hovered {
             let hover_brush = CreateSolidBrush(rgb(0x23, 0x23, 0x2F));
             let old_b = SelectObject(hdc, hover_brush as HGDIOBJ);
             RoundRect(hdc, state.tb_search_rect.left, state.tb_search_rect.top, state.tb_search_rect.right, state.tb_search_rect.bottom, 6, 6);
             SelectObject(hdc, old_b);
             DeleteObject(hover_brush as HGDIOBJ);
-            SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
+            rgb(0xFF, 0xFF, 0xFF)
         } else {
-            SetTextColor(hdc, rgb(0xC0, 0xC0, 0xC8));
-        }
-        let w_s = to_wide_null("🔍");
-        TextOutW(hdc, state.tb_search_rect.left + 9, state.tb_search_rect.top + 7, w_s.as_ptr(), (w_s.len() - 1) as i32);
+            rgb(0xC0, 0xC0, 0xC8)
+        };
+        draw_vector_search(hdc, (state.tb_search_rect.left + state.tb_search_rect.right) / 2, cy, search_btn_color);
 
         SelectObject(hdc, old_tf);
         DeleteObject(tools_font as HGDIOBJ);
@@ -2512,26 +2902,12 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
             String::new()
         };
 
-        let badge_text = if state.save_toast_active {
-            "✓ Saved"
-        } else if state.is_dirty {
-            "○ Edited"
-        } else {
-            "● Saved"
-        };
-
-        let badge_color = if state.save_toast_active || !state.is_dirty {
-            rgb(0x10, 0xB9, 0x81) // Emerald #10B981
-        } else {
-            rgb(0xF5, 0x9E, 0x0B) // Amber #F59E0B
-        };
-
         let center_x = width / 2;
-        let pill_w = ((filename.len() + page_info.len()) * 7 + 120).clamp(260, 440) as i32;
+        let pill_w = ((filename.len() + page_info.len()) * 7 + 120).clamp(240, 440) as i32;
         let mut pill_left = center_x - pill_w / 2;
         let mut pill_right = center_x + pill_w / 2;
 
-        let min_left = 280;
+        let min_left = 308;
         let max_right = tool_pill_left - 10;
         if pill_left < min_left {
             pill_left = min_left;
@@ -2552,12 +2928,29 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
             DeleteObject(pill_brush as HGDIOBJ);
             DeleteObject(pill_pen as HGDIOBJ);
 
-            // Left badge
+            // Left vector status indicator dot
+            let dot_x = pill_left + 16;
+            let dot_y = pill_y + pill_h / 2;
+            draw_vector_status_dot(hdc, dot_x, dot_y, state.is_dirty, state.save_toast_active);
+
+            let status_text = if state.save_toast_active {
+                "Saved"
+            } else if state.is_dirty {
+                "Edited"
+            } else {
+                "Saved"
+            };
+            let status_color = if state.save_toast_active || !state.is_dirty {
+                rgb(0x10, 0xB9, 0x81) // Emerald #10B981
+            } else {
+                rgb(0xF5, 0x9E, 0x0B) // Amber #F59E0B
+            };
+
             let badge_font = CreateFontW(12, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
             let old_bf = SelectObject(hdc, badge_font as HGDIOBJ);
-            SetTextColor(hdc, badge_color);
-            let w_badge = to_wide_null(badge_text);
-            TextOutW(hdc, pill_left + 12, pill_y + 5, w_badge.as_ptr(), (w_badge.len() - 1) as i32);
+            SetTextColor(hdc, status_color);
+            let w_badge = to_wide_null(status_text);
+            TextOutW(hdc, pill_left + 26, pill_y + 5, w_badge.as_ptr(), (w_badge.len() - 1) as i32);
             SelectObject(hdc, old_bf);
             DeleteObject(badge_font as HGDIOBJ);
 
@@ -2584,6 +2977,7 @@ fn paint_search_bar(state: &mut AppState, hdc: HDC) {
     }
     state.update_search_controls_layout();
     let card = state.search_card_rect;
+    let card_cy = (card.top + card.bottom) / 2;
 
     unsafe {
         // Drop shadow behind floating card
@@ -2610,14 +3004,8 @@ fn paint_search_bar(state: &mut AppState, hdc: HDC) {
 
         SetBkMode(hdc, TRANSPARENT);
 
-        // Magnifying glass icon: "🔍"
-        let icon_font = CreateFontW(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
-        let old_f = SelectObject(hdc, icon_font as HGDIOBJ);
-        SetTextColor(hdc, rgb(0x90, 0x90, 0x9A));
-        let search_icon = to_wide_null("🔍");
-        TextOutW(hdc, card.left + 10, card.top + 9, search_icon.as_ptr(), (search_icon.len() - 1) as i32);
-        SelectObject(hdc, old_f);
-        DeleteObject(icon_font as HGDIOBJ);
+        // Crisp Vector Magnifying Glass Icon
+        draw_vector_search(hdc, card.left + 18, card_cy, rgb(0x90, 0x90, 0x9A));
 
         // Result Counter
         let counter_font = CreateFontW(12, 0, 0, 0, 500, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
@@ -2639,34 +3027,48 @@ fn paint_search_bar(state: &mut AppState, hdc: HDC) {
         SelectObject(hdc, old_cf);
         DeleteObject(counter_font as HGDIOBJ);
 
-        // Action Buttons: Prev (▲), Next (▼), Close (✕)
-        let btn_font = CreateFontW(12, 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, to_wide_null("Segoe UI").as_ptr());
-        let old_bf = SelectObject(hdc, btn_font as HGDIOBJ);
+        // Action Buttons: Prev (Chevron Up), Next (Chevron Down), Close (X)
+        // 1. Prev
+        let is_prev_hover = state.hovered_control == Some(ToolbarControl::SearchPrev);
+        let prev_color = if is_prev_hover {
+            let hb = CreateSolidBrush(rgb(0x28, 0x28, 0x38));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.search_prev_rect.left, state.search_prev_rect.top, state.search_prev_rect.right, state.search_prev_rect.bottom, 4, 4);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0x90, 0x90, 0x9A)
+        };
+        draw_vector_chevron(hdc, (state.search_prev_rect.left + state.search_prev_rect.right) / 2, card_cy, true, prev_color);
 
-        let btns = [
-            (state.search_prev_rect, "▲", ToolbarControl::SearchPrev),
-            (state.search_next_rect, "▼", ToolbarControl::SearchNext),
-            (state.search_close_rect, "✕", ToolbarControl::SearchClose),
-        ];
+        // 2. Next
+        let is_next_hover = state.hovered_control == Some(ToolbarControl::SearchNext);
+        let next_color = if is_next_hover {
+            let hb = CreateSolidBrush(rgb(0x28, 0x28, 0x38));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.search_next_rect.left, state.search_next_rect.top, state.search_next_rect.right, state.search_next_rect.bottom, 4, 4);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0x90, 0x90, 0x9A)
+        };
+        draw_vector_chevron(hdc, (state.search_next_rect.left + state.search_next_rect.right) / 2, card_cy, false, next_color);
 
-        for (rc, label, ctrl) in btns {
-            let hovered = state.hovered_control == Some(ctrl);
-            if hovered {
-                let hover_brush = CreateSolidBrush(rgb(0x28, 0x28, 0x38));
-                let old_b = SelectObject(hdc, hover_brush as HGDIOBJ);
-                RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 4, 4);
-                SelectObject(hdc, old_b);
-                DeleteObject(hover_brush as HGDIOBJ);
-                SetTextColor(hdc, rgb(0xFF, 0xFF, 0xFF));
-            } else {
-                SetTextColor(hdc, rgb(0x90, 0x90, 0x9A));
-            }
-            let w_label = to_wide_null(label);
-            TextOutW(hdc, rc.left + 8, rc.top + 6, w_label.as_ptr(), (w_label.len() - 1) as i32);
-        }
-
-        SelectObject(hdc, old_bf);
-        DeleteObject(btn_font as HGDIOBJ);
+        // 3. Close
+        let is_close_hover = state.hovered_control == Some(ToolbarControl::SearchClose);
+        let close_color = if is_close_hover {
+            let hb = CreateSolidBrush(rgb(0x28, 0x28, 0x38));
+            let ob = SelectObject(hdc, hb as HGDIOBJ);
+            RoundRect(hdc, state.search_close_rect.left, state.search_close_rect.top, state.search_close_rect.right, state.search_close_rect.bottom, 4, 4);
+            SelectObject(hdc, ob);
+            DeleteObject(hb as HGDIOBJ);
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0x90, 0x90, 0x9A)
+        };
+        draw_vector_close(hdc, (state.search_close_rect.left + state.search_close_rect.right) / 2, card_cy, close_color);
     }
 }
 
