@@ -153,6 +153,15 @@ pub struct PdfiumApi {
     pub FPDFTextObj_GetText: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, FPDF_TEXTPAGE, *mut u16, c_uint) -> c_uint>,
     pub FPDFTextObj_GetFontSize: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, *mut f32) -> c_int>,
     pub FPDFText_SetText: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, *const u16) -> c_int>,
+    pub FPDFText_GetTextObject: Option<unsafe extern "C" fn(FPDF_TEXTPAGE, c_int) -> FPDF_PAGEOBJECT>,
+    pub FPDFText_LoadStandardFont: Option<unsafe extern "C" fn(FPDF_DOCUMENT, *const c_char) -> FPDF_FONT>,
+    pub FPDFPageObj_CreateTextObj: Option<unsafe extern "C" fn(FPDF_DOCUMENT, FPDF_FONT, f32) -> FPDF_PAGEOBJECT>,
+    pub FPDFPageObj_Transform: Option<unsafe extern "C" fn(FPDF_PAGEOBJECT, f64, f64, f64, f64, f64, f64)>,
+    pub FPDFPage_InsertObject: Option<unsafe extern "C" fn(FPDF_PAGE, FPDF_PAGEOBJECT)>,
+
+    // Device Coordinate Conversions
+    pub FPDF_DeviceToPage: Option<unsafe extern "C" fn(FPDF_PAGE, c_int, c_int, c_int, c_int, c_int, c_int, c_int, *mut f64, *mut f64) -> c_int>,
+    pub FPDF_PageToDevice: Option<unsafe extern "C" fn(FPDF_PAGE, c_int, c_int, c_int, c_int, c_int, f64, f64, *mut c_int, *mut c_int) -> c_int>,
 
     // Saving
     pub FPDF_SaveAsCopy: unsafe extern "C" fn(FPDF_DOCUMENT, *mut FPDF_FILEWRITE, c_int) -> c_int,
@@ -257,6 +266,13 @@ impl PdfiumLibrary {
                 FPDFTextObj_GetText: resolve_opt!(FPDFTextObj_GetText),
                 FPDFTextObj_GetFontSize: resolve_opt!(FPDFTextObj_GetFontSize),
                 FPDFText_SetText: resolve_opt!(FPDFText_SetText),
+                FPDFText_GetTextObject: resolve_opt!(FPDFText_GetTextObject),
+                FPDFText_LoadStandardFont: resolve_opt!(FPDFText_LoadStandardFont),
+                FPDFPageObj_CreateTextObj: resolve_opt!(FPDFPageObj_CreateTextObj),
+                FPDFPageObj_Transform: resolve_opt!(FPDFPageObj_Transform),
+                FPDFPage_InsertObject: resolve_opt!(FPDFPage_InsertObject),
+                FPDF_DeviceToPage: resolve_opt!(FPDF_DeviceToPage),
+                FPDF_PageToDevice: resolve_opt!(FPDF_PageToDevice),
 
                 FPDF_SaveAsCopy: resolve!(FPDF_SaveAsCopy),
                 FPDF_GetLastError: resolve!(FPDF_GetLastError),
@@ -381,6 +397,30 @@ impl PdfDocument {
             true
         } else {
             false
+        }
+    }
+
+    pub fn load_standard_font(&self, font_name: &str) -> Option<FPDF_FONT> {
+        let loader = self.api.FPDFText_LoadStandardFont?;
+        let c_name = CString::new(font_name).ok()?;
+        let font = unsafe { loader(self.raw, c_name.as_ptr()) };
+        if font.is_null() {
+            None
+        } else {
+            Some(font)
+        }
+    }
+
+    pub fn create_text_object(&self, font: FPDF_FONT, font_size: f32) -> Option<PdfPageObject> {
+        let creator = self.api.FPDFPageObj_CreateTextObj?;
+        let obj = unsafe { creator(self.raw, font, font_size) };
+        if obj.is_null() {
+            None
+        } else {
+            Some(PdfPageObject {
+                raw: obj,
+                api: Arc::clone(&self.api),
+            })
         }
     }
 
@@ -565,6 +605,83 @@ impl PdfPage {
             })
         }
     }
+
+    pub fn insert_object(&self, obj: &PdfPageObject) -> bool {
+        if let Some(inserter) = self.api.FPDFPage_InsertObject {
+            unsafe { inserter(self.raw, obj.raw) };
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn device_to_page(
+        &self,
+        start_x: i32,
+        start_y: i32,
+        size_x: i32,
+        size_y: i32,
+        rotate: i32,
+        device_x: i32,
+        device_y: i32,
+    ) -> Option<(f64, f64)> {
+        let d2p = self.api.FPDF_DeviceToPage?;
+        let mut page_x = 0.0f64;
+        let mut page_y = 0.0f64;
+        let ret = unsafe {
+            d2p(
+                self.raw,
+                start_x,
+                start_y,
+                size_x,
+                size_y,
+                rotate,
+                device_x,
+                device_y,
+                &mut page_x,
+                &mut page_y,
+            )
+        };
+        if ret != 0 {
+            Some((page_x, page_y))
+        } else {
+            None
+        }
+    }
+
+    pub fn page_to_device(
+        &self,
+        start_x: i32,
+        start_y: i32,
+        size_x: i32,
+        size_y: i32,
+        rotate: i32,
+        page_x: f64,
+        page_y: f64,
+    ) -> Option<(i32, i32)> {
+        let p2d = self.api.FPDF_PageToDevice?;
+        let mut dev_x = 0i32;
+        let mut dev_y = 0i32;
+        let ret = unsafe {
+            p2d(
+                self.raw,
+                start_x,
+                start_y,
+                size_x,
+                size_y,
+                rotate,
+                page_x,
+                page_y,
+                &mut dev_x,
+                &mut dev_y,
+            )
+        };
+        if ret != 0 {
+            Some((dev_x, dev_y))
+        } else {
+            None
+        }
+    }
 }
 
 // Safe TextPage RAII
@@ -637,6 +754,19 @@ impl PdfTextPage {
             Some(idx as usize)
         } else {
             None
+        }
+    }
+
+    pub fn get_text_object(&self, char_index: usize) -> Option<PdfPageObject> {
+        let getter = self.api.FPDFText_GetTextObject?;
+        let obj = unsafe { getter(self.raw, char_index as c_int) };
+        if obj.is_null() {
+            None
+        } else {
+            Some(PdfPageObject {
+                raw: obj,
+                api: Arc::clone(&self.api),
+            })
         }
     }
 
@@ -759,12 +889,9 @@ impl PdfPageObject {
             let mut buf = vec![0u16; required as usize];
             let written = unsafe { getter(self.raw, text_page.raw, buf.as_mut_ptr(), required) };
             if written > 0 {
-                let actual = if buf.ends_with(&[0]) {
-                    &buf[..buf.len() - 1]
-                } else {
-                    &buf[..]
-                };
-                return Some(String::from_utf16_lossy(actual));
+                let s = String::from_utf16_lossy(&buf);
+                let clean = s.trim_matches('\0').to_string();
+                return Some(clean);
             }
         }
         None
@@ -788,6 +915,12 @@ impl PdfPageObject {
             ret != 0
         } else {
             false
+        }
+    }
+
+    pub fn transform(&self, a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) {
+        if let Some(transformer) = self.api.FPDFPageObj_Transform {
+            unsafe { transformer(self.raw, a, b, c, d, e, f) };
         }
     }
 }

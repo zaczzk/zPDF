@@ -12,7 +12,7 @@ use crate::editor::{
     apply_text_mutation, hit_test_text_object, ActiveTextEditor, EditAction, ToolMode,
     UndoManager,
 };
-use crate::pdfium::{PdfDocument, PdfiumLibrary};
+use crate::pdfium::{PdfDocument, PdfiumLibrary, RectF};
 use crate::tile_cache::{ThumbnailCache, TileCache};
 
 // Win32 Types
@@ -31,7 +31,7 @@ pub type WPARAM = usize;
 pub type LRESULT = isize;
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct RECT {
     pub left: i32,
     pub top: i32,
@@ -240,6 +240,7 @@ extern "system" {
     fn TrackMouseEvent(lpEventTrack: *mut TRACKMOUSEEVENT) -> i32;
     fn GetKeyState(nVirtKey: i32) -> i16;
     fn ScreenToClient(hWnd: HWND, lpPoint: *mut POINT) -> i32;
+    fn GetCursorPos(lpPoint: *mut POINT) -> i32;
     fn MessageBoxW(hWnd: HWND, lpText: *const u16, lpCaption: *const u16, uType: u32) -> i32;
     fn DrawIconEx(
         hdc: HDC,
@@ -378,6 +379,7 @@ pub struct AppState {
 
     // Mouse & Interaction
     pub hovered_button: Option<usize>,
+    pub hovered_edit_rect: Option<RECT>,
     pub is_dragging: bool,
     pub drag_start_x: i32,
     pub drag_start_y: i32,
@@ -416,6 +418,12 @@ unsafe extern "system" fn edit_subclass_proc(
                 return 0;
             }
         }
+        WM_CHAR => {
+            // Suppress error beeps on Enter/Esc in single-line edit
+            if wparam == 0x0D || wparam == 0x1B {
+                return 0;
+            }
+        }
         _ => {}
     }
     CallWindowProcW(OLD_EDIT_PROC, hwnd, msg, wparam, lparam)
@@ -446,6 +454,7 @@ impl AppState {
             page_layouts: Vec::new(),
             total_content_height: 0,
             hovered_button: None,
+            hovered_edit_rect: None,
             is_dragging: false,
             drag_start_x: 0,
             drag_start_y: 0,
@@ -476,11 +485,28 @@ impl AppState {
         Ok(())
     }
 
+    pub fn clamp_scroll(&mut self) {
+        let avail_w = self.viewport_width - self.sidebar_width;
+        let max_page_w = self.page_layouts.iter().map(|l| l.render_w).max().unwrap_or(0);
+        let max_scroll_x = (max_page_w + 48 - avail_w).max(0);
+        self.scroll_x = self.scroll_x.clamp(0, max_scroll_x);
+
+        let avail_h = self.viewport_height - self.toolbar_height - self.status_height;
+        let max_scroll_y = (self.total_content_height - avail_h).max(0);
+        self.scroll_y = self.scroll_y.clamp(0, max_scroll_y);
+
+        let max_sidebar_scroll = (self.sidebar_total_height - avail_h).max(0);
+        self.sidebar_scroll_y = self.sidebar_scroll_y.clamp(0, max_sidebar_scroll);
+    }
+
     pub fn recompute_layouts(&mut self) {
         self.page_layouts.clear();
         let Some(doc) = &self.doc else {
             self.total_content_height = 0;
             self.sidebar_total_height = 0;
+            self.scroll_x = 0;
+            self.scroll_y = 0;
+            self.sidebar_scroll_y = 0;
             return;
         };
 
@@ -488,6 +514,10 @@ impl AppState {
         let scale = self.zoom_pct as f64 / 100.0;
         let mut y = 24;
         let gap = 24;
+
+        let mut sidebar_y = 28;
+        let thumb_max_w = 144;
+        let thumb_max_h = 160;
 
         for i in 0..page_count {
             if let Ok(page) = doc.load_page(i) {
@@ -512,9 +542,18 @@ impl AppState {
                 });
 
                 y += render_h + gap;
+
+                let aspect = eff_h / eff_w.max(1.0);
+                let mut th = ((thumb_max_w as f64) * aspect).round() as i32;
+                if th > thumb_max_h { th = thumb_max_h; }
+                if th < 40 { th = 40; }
+                let slot_h = th + 34;
+                sidebar_y += slot_h;
             }
         }
         self.total_content_height = y;
+        self.sidebar_total_height = sidebar_y;
+        self.clamp_scroll();
     }
 
     pub fn update_title(&self) {
@@ -667,17 +706,39 @@ pub fn commit_active_text_editor(state: &mut AppState) {
     };
 
     if let (Some(editor), Some(doc)) = (state.active_editor.take(), &state.doc) {
-        if new_text != editor.original_text {
-            let _ = apply_text_mutation(doc, editor.page_index, editor.object_index, &new_text);
-            state.undo_manager.push(EditAction::EditTextRun {
-                page_index: editor.page_index,
-                object_index: editor.object_index,
-                old_text: editor.original_text,
-                new_text,
-            });
-            state.tile_cache.invalidate_page(editor.page_index);
-            state.thumb_cache.invalidate(editor.page_index);
-            state.invalidate();
+        if let Some(obj_idx) = editor.object_index {
+            // Existing text object mutation
+            if new_text != editor.original_text {
+                let _ = apply_text_mutation(doc, editor.page_index, obj_idx, &new_text);
+                state.undo_manager.push(EditAction::EditTextRun {
+                    page_index: editor.page_index,
+                    object_index: obj_idx,
+                    old_text: editor.original_text,
+                    new_text,
+                });
+                state.tile_cache.invalidate_page(editor.page_index);
+                state.thumb_cache.invalidate(editor.page_index);
+                state.invalidate();
+            }
+        } else if !new_text.trim().is_empty() {
+            // New text object insertion
+            if let Ok(new_obj_idx) = crate::editor::insert_new_text_run(
+                doc,
+                editor.page_index,
+                &new_text,
+                editor.insert_pos.0,
+                editor.insert_pos.1,
+                editor.font_size,
+            ) {
+                state.undo_manager.push(EditAction::InsertTextRun {
+                    page_index: editor.page_index,
+                    object_index: new_obj_idx,
+                    text: new_text,
+                });
+                state.tile_cache.invalidate_page(editor.page_index);
+                state.thumb_cache.invalidate(editor.page_index);
+                state.invalidate();
+            }
         }
     }
 
@@ -730,6 +791,14 @@ pub fn handle_undo(state: &mut AppState) {
                 state.invalidate();
             }
         }
+        EditAction::InsertTextRun { page_index, object_index, .. } => {
+            if let Some(doc) = &state.doc {
+                let _ = apply_text_mutation(doc, page_index, object_index, "");
+                state.tile_cache.invalidate_page(page_index);
+                state.thumb_cache.invalidate(page_index);
+                state.invalidate();
+            }
+        }
         _ => {}
     }
 }
@@ -752,6 +821,14 @@ pub fn handle_redo(state: &mut AppState) {
         EditAction::EditTextRun { page_index, object_index, new_text, .. } => {
             if let Some(doc) = &state.doc {
                 let _ = apply_text_mutation(doc, page_index, object_index, &new_text);
+                state.tile_cache.invalidate_page(page_index);
+                state.thumb_cache.invalidate(page_index);
+                state.invalidate();
+            }
+        }
+        EditAction::InsertTextRun { page_index, object_index, text } => {
+            if let Some(doc) = &state.doc {
+                let _ = apply_text_mutation(doc, page_index, object_index, &text);
                 state.tile_cache.invalidate_page(page_index);
                 state.thumb_cache.invalidate(page_index);
                 state.invalidate();
@@ -780,58 +857,84 @@ fn handle_text_edit_click(state: &mut AppState, client_x: i32, client_y: i32) {
             && client_y >= page_y
             && client_y <= page_y + layout.render_h
         {
-            let scale = (state.zoom_pct as f64 / 100.0) * 1.333333;
-            let rel_x = (client_x - page_x) as f64;
-            let rel_y = (client_y - page_y) as f64;
-            let pdf_x = rel_x / scale;
-            let pdf_y = layout.height_pt - (rel_y / scale);
+            let Ok(page) = doc.load_page(layout.index) else { break };
+            let rot = page.rotation();
+            let dev_x = client_x - page_x;
+            let dev_y = client_y - page_y;
 
-            if let Ok(page) = doc.load_page(layout.index) {
-                if let Some((obj_idx, text, bounds)) = hit_test_text_object(&page, pdf_x as f32, pdf_y as f32, 4.0) {
-                    let screen_x = page_x + (bounds.left as f64 * scale).round() as i32;
-                    let screen_y = page_y + ((layout.height_pt - bounds.top as f64) * scale).round() as i32;
-                    let screen_w = ((bounds.right - bounds.left) as f64 * scale).round().max(40.0) as i32 + 8;
-                    let screen_h = ((bounds.top - bounds.bottom) as f64 * scale).round().max(18.0) as i32 + 6;
+            let Some((pdf_x, pdf_y)) = page.device_to_page(0, 0, layout.render_w, layout.render_h, rot, dev_x, dev_y) else {
+                break;
+            };
 
-                    let edit_class = to_wide_null("EDIT");
-                    let text_w = to_wide_null(&text);
+            let hit = hit_test_text_object(&page, pdf_x as f32, pdf_y as f32, 8.0);
 
-                    unsafe {
-                        let edit_ctl = CreateWindowExW(
-                            0,
-                            edit_class.as_ptr(),
-                            text_w.as_ptr(),
-                            WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                            screen_x,
-                            screen_y,
-                            screen_w,
-                            screen_h,
-                            state.hwnd,
-                            1001 as *mut c_void,
-                            GetModuleHandleW(ptr::null()),
-                            ptr::null_mut(),
-                        );
+            let (obj_idx, initial_text, screen_x, screen_y, screen_w, screen_h, bounds, font_size): (Option<usize>, String, i32, i32, i32, i32, RectF, f32) = if let Some((idx, text, bounds)) = hit {
+                let pt1 = page.page_to_device(0, 0, layout.render_w, layout.render_h, rot, bounds.left as f64, bounds.top as f64);
+                let pt2 = page.page_to_device(0, 0, layout.render_w, layout.render_h, rot, bounds.right as f64, bounds.bottom as f64);
 
-                        if !edit_ctl.is_null() {
-                            let font = CreateFontW(
-                                (screen_h - 6).max(14),
-                                0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
-                                to_wide_null("Segoe UI").as_ptr(),
-                            );
-                            SendMessageW(edit_ctl, WM_SETFONT, font as WPARAM, 1);
-                            state.edit_font = font;
-                            OLD_EDIT_PROC = SetWindowLongPtrW(edit_ctl, GWLP_WNDPROC, edit_subclass_proc as *const () as isize);
-                            SetFocus(edit_ctl);
-                            state.edit_hwnd = edit_ctl;
-                            state.active_editor = Some(ActiveTextEditor {
-                                page_index: layout.index,
-                                object_index: obj_idx,
-                                original_text: text.clone(),
-                                current_text: text,
-                                bounds,
-                            });
-                        }
+                let (bx, by, bw, bh) = match (pt1, pt2) {
+                    (Some((x1, y1)), Some((x2, y2))) => {
+                        let sx = page_x + x1.min(x2);
+                        let sy = page_y + y1.min(y2);
+                        let sw = (x1 - x2).abs().max(60) + 12;
+                        let sh = (y1 - y2).abs().max(20) + 6;
+                        (sx, sy, sw, sh)
                     }
+                    _ => (client_x - 4, client_y - 10, 160, 26),
+                };
+
+                let fsize = page.get_object(idx).and_then(|o| o.get_font_size()).unwrap_or(14.0);
+                (Some(idx), text, bx, by, bw, bh, bounds, fsize)
+            } else {
+                let default_bounds = RectF {
+                    left: pdf_x as f32,
+                    bottom: pdf_y as f32,
+                    right: (pdf_x + 120.0) as f32,
+                    top: (pdf_y + 16.0) as f32,
+                };
+                (None, String::new(), client_x, client_y, 160, 26, default_bounds, 14.0)
+            };
+
+            let edit_class = to_wide_null("EDIT");
+            let text_w = to_wide_null(&initial_text);
+
+            unsafe {
+                let edit_ctl = CreateWindowExW(
+                    0,
+                    edit_class.as_ptr(),
+                    text_w.as_ptr(),
+                    WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                    screen_x,
+                    screen_y,
+                    screen_w,
+                    screen_h,
+                    state.hwnd,
+                    1001 as *mut c_void,
+                    GetModuleHandleW(ptr::null()),
+                    ptr::null_mut(),
+                );
+
+                if !edit_ctl.is_null() {
+                    let font = CreateFontW(
+                        (screen_h - 6).max(14),
+                        0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0,
+                        to_wide_null("Segoe UI").as_ptr(),
+                    );
+                    SendMessageW(edit_ctl, WM_SETFONT, font as WPARAM, 1);
+                    state.edit_font = font;
+                    OLD_EDIT_PROC = SetWindowLongPtrW(edit_ctl, GWLP_WNDPROC, edit_subclass_proc as *const () as isize);
+                    SendMessageW(edit_ctl, 0x00B1, 0, -1);
+                    SetFocus(edit_ctl);
+                    state.edit_hwnd = edit_ctl;
+                    state.active_editor = Some(ActiveTextEditor {
+                        page_index: layout.index,
+                        object_index: obj_idx,
+                        original_text: initial_text.clone(),
+                        current_text: initial_text,
+                        bounds,
+                        insert_pos: (pdf_x, pdf_y),
+                        font_size,
+                    });
                 }
             }
             break;
@@ -872,8 +975,33 @@ unsafe extern "system" fn window_proc(
             let h = ((lparam >> 16) & 0xFFFF) as i32;
             state.viewport_width = w;
             state.viewport_height = h;
+            state.clamp_scroll();
             state.invalidate();
             0
+        }
+
+        WM_SETCURSOR => {
+            let hit_test = (lparam & 0xFFFF) as i16;
+            if hit_test == 1 { // HTCLIENT
+                let mut pt = POINT { x: 0, y: 0 };
+                unsafe {
+                    GetCursorPos(&mut pt);
+                    ScreenToClient(hwnd, &mut pt);
+                }
+
+                let cursor = if pt.y < state.toolbar_height || pt.x < state.sidebar_width || state.doc.is_none() {
+                    unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) }
+                } else {
+                    match state.tool_mode {
+                        ToolMode::Pan => unsafe { LoadCursorW(ptr::null_mut(), IDC_HAND) },
+                        ToolMode::EditTextObject => unsafe { LoadCursorW(ptr::null_mut(), IDC_IBEAM) },
+                        _ => unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
+                    }
+                };
+                unsafe { SetCursor(cursor) };
+                return 1;
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
         WM_ERASEBKGND => 1,
@@ -975,20 +1103,79 @@ unsafe extern "system" fn window_proc(
                 state.invalidate();
             }
 
+            // Live hover highlight in Edit mode
+            if state.tool_mode == ToolMode::EditTextObject && !state.is_dragging {
+                let mut found_hover_rect = None;
+                if let Some(doc) = &state.doc {
+                    let avail_w = state.viewport_width - state.sidebar_width;
+                    for layout in &state.page_layouts {
+                        let page_x = if avail_w > layout.render_w {
+                            state.sidebar_width + (avail_w - layout.render_w) / 2
+                        } else {
+                            state.sidebar_width + 24 - state.scroll_x
+                        };
+                        let page_y = state.toolbar_height - state.scroll_y + layout.y_offset;
+
+                        if x >= page_x && x <= page_x + layout.render_w && y >= page_y && y <= page_y + layout.render_h {
+                            if let Ok(page) = doc.load_page(layout.index) {
+                                let rot = page.rotation();
+                                let dev_x = x - page_x;
+                                let dev_y = y - page_y;
+                                if let Some((pdf_x, pdf_y)) = page.device_to_page(0, 0, layout.render_w, layout.render_h, rot, dev_x, dev_y) {
+                                    if let Some((_, _, bounds)) = hit_test_text_object(&page, pdf_x as f32, pdf_y as f32, 6.0) {
+                                        let pt1 = page.page_to_device(0, 0, layout.render_w, layout.render_h, rot, bounds.left as f64, bounds.top as f64);
+                                        let pt2 = page.page_to_device(0, 0, layout.render_w, layout.render_h, rot, bounds.right as f64, bounds.bottom as f64);
+                                        if let (Some((x1, y1)), Some((x2, y2))) = (pt1, pt2) {
+                                            found_hover_rect = Some(RECT {
+                                                left: page_x + x1.min(x2) - 2,
+                                                top: page_y + y1.min(y2) - 2,
+                                                right: page_x + x1.max(x2) + 2,
+                                                bottom: page_y + y1.max(y2) + 2,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                if found_hover_rect != state.hovered_edit_rect {
+                    state.hovered_edit_rect = found_hover_rect;
+                    state.invalidate();
+                }
+            } else if state.hovered_edit_rect.is_some() {
+                state.hovered_edit_rect = None;
+                state.invalidate();
+            }
+
             if state.is_dragging {
                 let dx = x - state.drag_start_x;
                 let dy = y - state.drag_start_y;
-                state.scroll_x = state.drag_start_scroll_x - dx;
-                let max_scroll = state.total_content_height.saturating_sub(state.viewport_height - state.toolbar_height - state.status_height);
-                state.scroll_y = (state.drag_start_scroll_y - dy).clamp(0, max_scroll);
+                let avail_w = state.viewport_width - state.sidebar_width;
+                let max_page_w = state.page_layouts.iter().map(|l| l.render_w).max().unwrap_or(0);
+                let max_scroll_x = (max_page_w + 48 - avail_w).max(0);
+                let avail_h = state.viewport_height - state.toolbar_height - state.status_height;
+                let max_scroll_y = (state.total_content_height - avail_h).max(0);
+
+                state.scroll_x = (state.drag_start_scroll_x - dx).clamp(0, max_scroll_x);
+                state.scroll_y = (state.drag_start_scroll_y - dy).clamp(0, max_scroll_y);
                 state.invalidate();
             }
             0
         }
 
         WM_MOUSELEAVE => {
+            let mut need_redraw = false;
             if state.hovered_button.is_some() {
                 state.hovered_button = None;
+                need_redraw = true;
+            }
+            if state.hovered_edit_rect.is_some() {
+                state.hovered_edit_rect = None;
+                need_redraw = true;
+            }
+            if need_redraw {
                 state.invalidate();
             }
             0
@@ -1022,24 +1209,28 @@ unsafe extern "system" fn window_proc(
                 // Scroll thumbnail rail
                 let step = 80;
                 let avail_h = state.viewport_height - state.toolbar_height - state.status_height;
-                let max_scroll = state.sidebar_total_height.saturating_sub(avail_h);
-                if delta > 0 {
-                    state.sidebar_scroll_y = state.sidebar_scroll_y.saturating_sub(step);
-                } else {
-                    state.sidebar_scroll_y = (state.sidebar_scroll_y + step).min(max_scroll);
+                let max_scroll = (state.sidebar_total_height - avail_h).max(0);
+                if max_scroll > 0 {
+                    if delta > 0 {
+                        state.sidebar_scroll_y = (state.sidebar_scroll_y - step).clamp(0, max_scroll);
+                    } else {
+                        state.sidebar_scroll_y = (state.sidebar_scroll_y + step).clamp(0, max_scroll);
+                    }
+                    state.invalidate();
                 }
-                state.invalidate();
-            } else {
+            } else if state.doc.is_some() {
                 commit_active_text_editor(state);
                 let step = 64;
                 let avail_h = state.viewport_height - state.toolbar_height - state.status_height;
-                let max_scroll = state.total_content_height.saturating_sub(avail_h);
-                if delta > 0 {
-                    state.scroll_y = state.scroll_y.saturating_sub(step);
-                } else {
-                    state.scroll_y = (state.scroll_y + step).min(max_scroll);
+                let max_scroll = (state.total_content_height - avail_h).max(0);
+                if max_scroll > 0 {
+                    if delta > 0 {
+                        state.scroll_y = (state.scroll_y - step).clamp(0, max_scroll);
+                    } else {
+                        state.scroll_y = (state.scroll_y + step).clamp(0, max_scroll);
+                    }
+                    state.invalidate();
                 }
-                state.invalidate();
             }
             0
         }
@@ -1170,8 +1361,13 @@ fn handle_sidebar_click(state: &mut AppState, _x: i32, y: i32) {
     }
 
     let mut current_y = 0;
+    let thumb_max_w = 144;
+    let thumb_max_h = 160;
+
     for i in 0..count {
-        let (eff_w, eff_h) = if let Ok(page) = doc.load_page(i) {
+        let (eff_w, eff_h) = if let Some(layout) = state.page_layouts.get(i) {
+            (layout.width_pt, layout.height_pt)
+        } else if let Ok(page) = doc.load_page(i) {
             let (w_pt, h_pt) = page.dimensions();
             let rot = page.rotation();
             if rot == 1 || rot == 3 { (h_pt, w_pt) } else { (w_pt, h_pt) }
@@ -1179,15 +1375,18 @@ fn handle_sidebar_click(state: &mut AppState, _x: i32, y: i32) {
             (612.0, 792.0)
         };
         let aspect = eff_h / eff_w.max(1.0);
-        let tw = 140;
+        let tw = thumb_max_w;
         let mut th = ((tw as f64) * aspect).round() as i32;
-        if th > 160 { th = 160; }
+        if th > thumb_max_h { th = thumb_max_h; }
+        if th < 40 { th = 40; }
         let slot_h = th + 34;
 
         if rel_y >= current_y && rel_y <= current_y + slot_h {
             state.active_page_idx = i;
             if let Some(layout) = state.page_layouts.get(i) {
-                state.scroll_y = (layout.y_offset - 24).max(0);
+                let avail_h = state.viewport_height - state.toolbar_height - state.status_height;
+                let max_scroll_y = (state.total_content_height - avail_h).max(0);
+                state.scroll_y = (layout.y_offset - 24).clamp(0, max_scroll_y);
                 commit_active_text_editor(state);
                 state.invalidate();
             }
@@ -1534,6 +1733,9 @@ fn paint_sidebar(state: &mut AppState, hdc: HDC, height: i32) {
             if th > thumb_max_h {
                 th = thumb_max_h;
             }
+            if th < 40 {
+                th = 40;
+            }
             let slot_h = th + 34;
 
             let visual_y = state.toolbar_height + current_slot_y - state.sidebar_scroll_y;
@@ -1543,7 +1745,24 @@ fn paint_sidebar(state: &mut AppState, hdc: HDC, height: i32) {
                 let tx = (state.sidebar_width - tw) / 2;
                 let ty = visual_y + 4;
 
-                // Ensure thumbnail is rendered in cache
+                // 1. Drop shadow behind thumbnail card
+                let shadow_rect = RECT {
+                    left: tx + 2,
+                    top: ty + 2,
+                    right: tx + tw + 2,
+                    bottom: ty + th + 2,
+                };
+                let shadow_brush = CreateSolidBrush(0x000E0A0A);
+                FillRect(hdc, &shadow_rect, shadow_brush);
+                DeleteObject(shadow_brush as HGDIOBJ);
+
+                // 2. White paper card base (#FFFFFF)
+                let card_rect = RECT { left: tx, top: ty, right: tx + tw, bottom: ty + th };
+                let paper_brush = CreateSolidBrush(0x00FFFFFF);
+                FillRect(hdc, &card_rect, paper_brush);
+                DeleteObject(paper_brush as HGDIOBJ);
+
+                // 3. Ensure thumbnail is rendered in cache
                 if state.thumb_cache.get(i).is_none() {
                     if let Ok(page) = doc.load_page(i) {
                         let stride = tw * 4;
@@ -1555,19 +1774,8 @@ fn paint_sidebar(state: &mut AppState, hdc: HDC, height: i32) {
                     }
                 }
 
-                // Render cached thumbnail bitmap
+                // 4. Render cached thumbnail bitmap
                 if let Some((_, _, pixels)) = state.thumb_cache.get(i) {
-                    // Subtle drop shadow behind thumbnail
-                    let shadow_rect = RECT {
-                        left: tx + 2,
-                        top: ty + 2,
-                        right: tx + tw + 2,
-                        bottom: ty + th + 2,
-                    };
-                    let shadow_brush = CreateSolidBrush(0x000E0A0A);
-                    FillRect(hdc, &shadow_rect, shadow_brush);
-                    DeleteObject(shadow_brush as HGDIOBJ);
-
                     let bmi = BITMAPINFO {
                         bmiHeader: BITMAPINFOHEADER {
                             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -1600,32 +1808,31 @@ fn paint_sidebar(state: &mut AppState, hdc: HDC, height: i32) {
                         0,
                         SRCCOPY,
                     );
-
-                    // Border / Selection ring
-                    let is_active = i == state.active_page_idx;
-                    let border_rect = RECT { left: tx, top: ty, right: tx + tw, bottom: ty + th };
-                    if is_active {
-                        // 2px active selection ring (#3B82F6 Electric Blue)
-                        let ring_brush = CreateSolidBrush(0x00F6823B);
-                        FrameRect(hdc, &border_rect, ring_brush);
-                        let inner_r = RECT { left: tx + 1, top: ty + 1, right: tx + tw - 1, bottom: ty + th - 1 };
-                        FrameRect(hdc, &inner_r, ring_brush);
-                        DeleteObject(ring_brush as HGDIOBJ);
-                    } else {
-                        // 1px hairline border (#2A2A34)
-                        let normal_brush = CreateSolidBrush(0x00342A2A);
-                        FrameRect(hdc, &border_rect, normal_brush);
-                        DeleteObject(normal_brush as HGDIOBJ);
-                    }
-
-                    // Clean page number badge
-                    let is_active = i == state.active_page_idx;
-                    SetTextColor(hdc, if is_active { 0x00FFFFFF } else { 0x008E8282 });
-                    let label = format!("{}", i + 1);
-                    let wide = to_wide_null(&label);
-                    let label_x = tx + (tw - 8) / 2;
-                    TextOutW(hdc, label_x, ty + th + 6, wide.as_ptr(), (wide.len() - 1) as i32);
                 }
+
+                // 5. Border / Selection ring
+                let is_active = i == state.active_page_idx;
+                let border_rect = RECT { left: tx, top: ty, right: tx + tw, bottom: ty + th };
+                if is_active {
+                    // 2px active selection ring (#3B82F6 Electric Blue)
+                    let ring_brush = CreateSolidBrush(0x00F6823B);
+                    FrameRect(hdc, &border_rect, ring_brush);
+                    let inner_r = RECT { left: tx + 1, top: ty + 1, right: tx + tw - 1, bottom: ty + th - 1 };
+                    FrameRect(hdc, &inner_r, ring_brush);
+                    DeleteObject(ring_brush as HGDIOBJ);
+                } else {
+                    // 1px hairline border (#2A2A34)
+                    let normal_brush = CreateSolidBrush(0x00342A2A);
+                    FrameRect(hdc, &border_rect, normal_brush);
+                    DeleteObject(normal_brush as HGDIOBJ);
+                }
+
+                // 6. Clean page number badge
+                SetTextColor(hdc, if is_active { 0x00FFFFFF } else { 0x008E8282 });
+                let label = format!("{}", i + 1);
+                let wide = to_wide_null(&label);
+                let label_x = tx + (tw - 8) / 2;
+                TextOutW(hdc, label_x, ty + th + 6, wide.as_ptr(), (wide.len() - 1) as i32);
             }
 
             current_slot_y += slot_h;
@@ -1763,6 +1970,15 @@ fn paint_pages(state: &mut AppState, hdc: HDC, viewport_w: i32, viewport_h: i32)
     }
 
     state.active_page_idx = current_page;
+
+    // Draw active hover highlight for editable text objects
+    if let Some(r) = state.hovered_edit_rect {
+        unsafe {
+            let hover_brush = CreateSolidBrush(0x00F6823B); // Electric Blue accent
+            FrameRect(hdc, &r, hover_brush);
+            DeleteObject(hover_brush as HGDIOBJ);
+        }
+    }
 }
 
 pub fn run_gui(pdfium: Arc<PdfiumLibrary>, initial_pdf: Option<PathBuf>) -> Result<(), String> {

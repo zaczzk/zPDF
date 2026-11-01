@@ -36,6 +36,11 @@ pub enum EditAction {
         old_text: String,
         new_text: String,
     },
+    InsertTextRun {
+        page_index: usize,
+        object_index: usize,
+        text: String,
+    },
     AddAnnotation {
         page_index: usize,
         annotation: Annotation,
@@ -93,10 +98,12 @@ impl UndoManager {
 
 pub struct ActiveTextEditor {
     pub page_index: usize,
-    pub object_index: usize,
+    pub object_index: Option<usize>, // None for newly inserted text
     pub original_text: String,
     pub current_text: String,
     pub bounds: RectF,
+    pub insert_pos: (f64, f64),      // (pdf_x, pdf_y) for new text
+    pub font_size: f32,
 }
 
 /// Spatially tests for text page objects on a PDF page at (pdf_x, pdf_y).
@@ -110,11 +117,11 @@ pub fn hit_test_text_object(
     let count = page.count_objects();
     let text_page = page.load_text_page().ok()?;
 
+    // 1. Direct object bounds test
     for i in (0..count).rev() {
         if let Some(obj) = page.get_object(i) {
             if obj.is_text() {
                 if let Some(mut bounds) = obj.get_bounds() {
-                    // Expand bounds slightly with padding
                     let hit_box = RectF {
                         left: bounds.left.min(bounds.right) - padding,
                         right: bounds.left.max(bounds.right) + padding,
@@ -124,7 +131,6 @@ pub fn hit_test_text_object(
 
                     if hit_box.contains(pdf_x, pdf_y) {
                         let text = obj.get_text(&text_page).unwrap_or_default();
-                        // Normalise bounds left < right and bottom < top
                         bounds.left = hit_box.left + padding;
                         bounds.right = hit_box.right - padding;
                         bounds.bottom = hit_box.bottom + padding;
@@ -136,10 +142,29 @@ pub fn hit_test_text_object(
         }
     }
 
+    // 2. Character-level proximity fallback
+    if let Some(char_idx) = text_page.get_char_index_at_pos(pdf_x as f64, pdf_y as f64, padding as f64 * 2.0, padding as f64 * 2.0) {
+        if let Some(char_box) = text_page.get_char_box(char_idx) {
+            // Find object corresponding to this character
+            for i in (0..count).rev() {
+                if let Some(obj) = page.get_object(i) {
+                    if obj.is_text() {
+                        if let Some(bounds) = obj.get_bounds() {
+                            if bounds.contains(char_box.left, char_box.bottom) || bounds.contains(char_box.right, char_box.top) {
+                                let text = obj.get_text(&text_page).unwrap_or_default();
+                                return Some((i, text, bounds));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 
-/// Mutates a text object's content and regenerates page content stream.
+/// Mutates an existing text object's content and regenerates page content stream.
 pub fn apply_text_mutation(
     doc: &PdfDocument,
     page_index: usize,
@@ -161,4 +186,39 @@ pub fn apply_text_mutation(
         }
     }
     Err("Text object not found on page".to_string())
+}
+
+/// Inserts a new text object into a page and regenerates page content stream.
+pub fn insert_new_text_run(
+    doc: &PdfDocument,
+    page_index: usize,
+    text: &str,
+    page_x: f64,
+    page_y: f64,
+    font_size: f32,
+) -> Result<usize, String> {
+    let page = doc.load_page(page_index)?;
+    let font = doc.load_standard_font("Helvetica")
+        .or_else(|| doc.load_standard_font("Arial"))
+        .ok_or_else(|| "Failed to load standard font".to_string())?;
+
+    let obj = doc.create_text_object(font, font_size)
+        .ok_or_else(|| "Failed to create text object".to_string())?;
+
+    if !obj.set_text(text) {
+        return Err("Failed to set text on new object".to_string());
+    }
+
+    obj.transform(1.0, 0.0, 0.0, 1.0, page_x, page_y);
+
+    if !page.insert_object(&obj) {
+        return Err("Failed to insert object into page".to_string());
+    }
+
+    if !page.generate_content() {
+        return Err("Failed to generate page content stream".to_string());
+    }
+
+    let new_idx = page.count_objects().saturating_sub(1);
+    Ok(new_idx)
 }
