@@ -1,0 +1,81 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $stage = "stage/zPDF-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/zpdf.exe" "$stage/zPDF.exe"
+          Copy-Item "README.md", "LICENSE" "$stage"
+          if (Test-Path "pdfium-${{ matrix.arch }}.dll") {
+            Copy-Item "pdfium-${{ matrix.arch }}.dll" "$stage/pdfium.dll"
+          } elseif (Test-Path "pdfium.dll") {
+            Copy-Item "pdfium.dll" "$stage/pdfium.dll"
+          } else {
+            Write-Warning "pdfium.dll not present in the repo - users must supply it (see README)"
+          }
+          Compress-Archive -Path "$stage/*" -DestinationPath "zPDF-${{ matrix.arch }}.zip"
+
+      # Signing: enable once SignPath Foundation approves the project (free for OSS).
+      # The action submits an unsigned request, SignPath returns the signed artifact.
+      # - name: Sign (SignPath Foundation)
+      #   uses: signpath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      #     project-slug: zpdf
+      #     signing-policy-slug: release-signing
+      #     github-artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: signed/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zPDF-${{ matrix.arch }}
+          path: zPDF-${{ matrix.arch }}.zip
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
