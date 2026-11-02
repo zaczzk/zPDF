@@ -68,6 +68,7 @@ Prebuilt binaries for the current version are also committed in [`dist/`](dist/)
 
 * **Portable (`.zip`)** — Extract anywhere and run immediately. No installation required.
 * **Installer (`-Setup.exe`)** — Standard Windows setup wizard with Start Menu shortcuts and automatic `.pdf` file association.
+  Running a newer installer on a machine that already has zPDF **upgrades it in place** — same folder, same uninstall entry, no duplicate installs. A *downgrade* over a newer version is refused.
 
 Ensure `pdfium.dll` is in the same folder as `zpdf.exe`:
 
