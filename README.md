@@ -64,6 +64,8 @@
 
 zPDF is distributed in two editions on [GitHub Releases](https://github.com/zaczzk/zpdf/releases):
 
+Prebuilt binaries for the current version are also committed in [`dist/`](dist/) if you would rather not use the releases page.
+
 * **Portable (`.zip`)** — Extract anywhere and run immediately. No installation required.
 * **Installer (`-Setup.exe`)** — Standard Windows setup wizard with Start Menu shortcuts and automatic `.pdf` file association.
 
