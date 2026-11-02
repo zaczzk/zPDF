@@ -7,7 +7,7 @@
 #endif
 
 #define MyAppName "zPDF"
-#define MyAppVersion "1.1.3"
+#define MyAppVersion "1.1.4"
 #define MyAppPublisher "zPDF"
 #define MyAppURL "https://github.com/zaczzk/zpdf"
 #define MyAppExeName "zpdf.exe"
@@ -88,7 +88,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 
 [Code]
 // Inno upgrades in place when AppId matches, which is already the case. This adds a heads-up
-// when the machine already has zPDF: a downgrade is allowed but must be confirmed, and the same
+// when the machine already has zPDF: a downgrade is never blocked, only confirmed, and the same
 // version asks before being reinstalled. A real upgrade installs without asking.
 const
   UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5C883A7E-873B-492F-A9F7-41E26AE2E651}_is1';
@@ -144,6 +144,11 @@ begin
   end;
 end;
 
+function AskConfirm(const Text: String; const SilentAnswer: Integer): Integer;
+begin
+  Result := SuppressibleMsgBox(Text, mbConfirmation, MB_YESNO or MB_DEFBUTTON2, SilentAnswer);
+end;
+
 function InitializeSetup(): Boolean;
 var
   prev: String;
@@ -154,15 +159,17 @@ begin
   if prev = '' then
     Exit;
   cmp := CompareVer(prev, '{#MyAppVersion}');
+  // SuppressibleMsgBox answers with the Default we give it when the install runs silently
+  // (/SILENT or /VERYSILENT). A plain MsgBox here would block a silent run forever.
   if cmp > 0 then
   begin
-    // Downgrade: allowed, but never silent. Default button is No.
-    if MsgBox('This machine already has zPDF ' + prev + ', which is newer than this installer (' + '{#MyAppVersion}' + ').' + #13#10 + #13#10 + 'Install the older version anyway?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDNO then
+    // Downgrade: allowed, never blocked. Default button is No, so an unattended upgrade still goes ahead.
+    if AskConfirm('This machine already has zPDF ' + prev + ', which is newer than this installer (' + '{#MyAppVersion}' + ').' + #13#10 + #13#10 + 'Install the older version anyway?', IDYES) = IDNO then
       Result := False;
   end
   else if cmp = 0 then
   begin
-    if MsgBox('zPDF ' + prev + ' is already installed.' + #13#10 + #13#10 + 'Reinstall it over the top?', mbConfirmation, MB_YESNO) = IDNO then
+    if AskConfirm('zPDF ' + prev + ' is already installed.' + #13#10 + #13#10 + 'Reinstall it over the top?', IDYES) = IDNO then
       Result := False;
   end;
 end;
