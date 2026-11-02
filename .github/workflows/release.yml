@@ -14,9 +14,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-pc-windows-msvc
+          - target: x86_64-pc-windows-gnullvm
             arch: x64
-          - target: aarch64-pc-windows-msvc
+          - target: aarch64-pc-windows-gnullvm
             arch: arm64
     runs-on: windows-latest
     steps:
