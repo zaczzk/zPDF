@@ -8,7 +8,7 @@
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-0%20crates-brightgreen.svg)](#what-it-never-does)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20ARM64%20%7C%20x64-crimson.svg)](#running-zpdf)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20ARM64%20%7C%20x64-crimson.svg)](#installation--portable-use)
 [![Binary Size](https://img.shields.io/badge/Size-~378%20KB-orange.svg)](#what-it-never-does)
 
 </div>
@@ -37,7 +37,7 @@
 * **No telemetry, analytics, or network calls** — Completely offline and air-gapped.
 * **No external crate dependencies** — Strictly 0 dependencies in `Cargo.toml`.
 * **No nag screens** — Asks once quietly to be your default PDF app, then never again.
-* **No installer clutter** — Single standalone 378 KB portable `.exe`.
+* **No bloated runtimes** — Pure native binary (~378 KB).
 
 ---
 
@@ -60,16 +60,24 @@
 
 ---
 
-## Running zPDF
+## Installation & Portable Use
+
+zPDF is distributed in two editions on [GitHub Releases](https://github.com/zaczzk/zpdf/releases):
+
+* **Portable (`.zip`)** — Extract anywhere and run immediately. No installation required.
+* **Installer (`-Setup.exe`)** — Standard Windows setup wizard with Start Menu shortcuts and automatic `.pdf` file association.
 
 Ensure `pdfium.dll` is in the same folder as `zpdf.exe`:
 
 ```powershell
-# Launch empty landing screen or open file picker
-.\zpdf.exe
-
-# Open a specific PDF document
+# Launch portable directly
 .\zpdf.exe sample.pdf
+
+# Register / Install as standard Windows app (per-user, no admin rights required)
+.\zpdf.exe --install
+
+# Unregister and remove all shortcuts and file associations
+.\zpdf.exe --uninstall
 
 # Run built-in self-tests & integrity checks
 .\zpdf.exe --self-test
@@ -97,7 +105,9 @@ Releases are built and signed automatically from this repository via GitHub Acti
 
 ## Uninstalling
 
-zPDF is completely portable. Delete the folder containing `zpdf.exe`.
+* **Installed version:** Uninstall via **Windows Settings > Installed apps**, or run `.\zpdf.exe --uninstall`.
+* **Portable version:** Simply delete the folder containing `zpdf.exe`.
+
 
 ---
 

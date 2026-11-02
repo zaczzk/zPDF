@@ -3998,84 +3998,86 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
         // ==========================================
         // CENTER ZONE: Hero Document Pill
         // ==========================================
-        let pill_h = s(30);
-        let pill_y = (tb_height - pill_h) / 2;
-        let filename = state.current_file.as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("No Document");
-        let total_pages = state.doc.as_ref().map_or(0, |d| d.page_count());
-        let page_info = if total_pages > 0 {
-            format!("• Page {} of {}", (state.active_page_idx + 1).min(total_pages), total_pages)
-        } else {
-            String::new()
-        };
-
-        let center_x = width / 2;
-        let pill_w = (((filename.len() + page_info.len()) as i32 * s(7)) + s(120)).clamp(s(240), s(460));
-        let mut pill_left = center_x - pill_w / 2;
-        let mut pill_right = center_x + pill_w / 2;
-
-        let min_left = state.tb_redo_rect.right + s(12);
-        let max_right = act_left - s(12);
-        if pill_left < min_left {
-            pill_left = min_left;
-            pill_right = (pill_left + pill_w).min(max_right);
-        } else if pill_right > max_right {
-            pill_right = max_right;
-            pill_left = (pill_right - pill_w).max(min_left);
-        }
-
-        if pill_right > pill_left + s(100) {
-            let pill_brush = CreateSolidBrush(rgb(0x19, 0x19, 0x22));
-            let pill_pen = CreatePen(0, 1, rgb(0x28, 0x28, 0x34));
-            let old_b = SelectObject(hdc, pill_brush as HGDIOBJ);
-            let old_p = SelectObject(hdc, pill_pen as HGDIOBJ);
-            RoundRect(hdc, pill_left, pill_y, pill_right, pill_y + pill_h, s(14), s(14));
-            SelectObject(hdc, old_b);
-            SelectObject(hdc, old_p);
-            DeleteObject(pill_brush as HGDIOBJ);
-            DeleteObject(pill_pen as HGDIOBJ);
-
-            // Left vector status indicator dot
-            let dot_x = pill_left + s(16);
-            let dot_y = pill_y + pill_h / 2;
-            draw_vector_status_dot(hdc, dot_x, dot_y, dpi, state.is_dirty, state.save_toast_active);
-
-            let status_text = if state.save_toast_active {
-                "Saved"
-            } else if state.is_dirty {
-                "Edited"
+        if let Some(doc) = &state.doc {
+            let pill_h = s(30);
+            let pill_y = (tb_height - pill_h) / 2;
+            let filename = state.current_file.as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("Untitled.pdf");
+            let total_pages = doc.page_count();
+            let page_info = if total_pages > 0 {
+                format!("• Page {} of {}", (state.active_page_idx + 1).min(total_pages), total_pages)
             } else {
-                "Saved"
-            };
-            let status_color = if state.save_toast_active || !state.is_dirty {
-                rgb(0x10, 0xB9, 0x81) // Emerald #10B981
-            } else {
-                rgb(0xF5, 0x9E, 0x0B) // Amber #F59E0B
+                String::new()
             };
 
-            let badge_font = create_ui_font(9.5, 600, dpi);
-            let old_bf = SelectObject(hdc, badge_font as HGDIOBJ);
-            SetTextColor(hdc, status_color);
-            let w_badge = to_wide_null(status_text);
-            TextOutW(hdc, pill_left + s(26), pill_y + s(6), w_badge.as_ptr(), (w_badge.len() - 1) as i32);
-            SelectObject(hdc, old_bf);
-            DeleteObject(badge_font as HGDIOBJ);
+            let center_x = width / 2;
+            let pill_w = (((filename.len() + page_info.len()) as i32 * s(7)) + s(120)).clamp(s(240), s(460));
+            let mut pill_left = center_x - pill_w / 2;
+            let mut pill_right = center_x + pill_w / 2;
 
-            // Document info
-            let doc_font = create_ui_font(9.5, 400, dpi);
-            let old_df = SelectObject(hdc, doc_font as HGDIOBJ);
-            SetTextColor(hdc, rgb(0xED, 0xED, 0xF0));
-            let full_doc_str = if page_info.is_empty() {
-                filename.to_string()
-            } else {
-                format!("{} {}", filename, page_info)
-            };
-            let w_doc = to_wide_null(&full_doc_str);
-            TextOutW(hdc, pill_left + s(72), pill_y + s(6), w_doc.as_ptr(), (w_doc.len() - 1) as i32);
-            SelectObject(hdc, old_df);
-            DeleteObject(doc_font as HGDIOBJ);
+            let min_left = state.tb_redo_rect.right + s(12);
+            let max_right = act_left - s(12);
+            if pill_left < min_left {
+                pill_left = min_left;
+                pill_right = (pill_left + pill_w).min(max_right);
+            } else if pill_right > max_right {
+                pill_right = max_right;
+                pill_left = (pill_right - pill_w).max(min_left);
+            }
+
+            if pill_right > pill_left + s(100) {
+                let pill_brush = CreateSolidBrush(rgb(0x19, 0x19, 0x22));
+                let pill_pen = CreatePen(0, 1, rgb(0x28, 0x28, 0x34));
+                let old_b = SelectObject(hdc, pill_brush as HGDIOBJ);
+                let old_p = SelectObject(hdc, pill_pen as HGDIOBJ);
+                RoundRect(hdc, pill_left, pill_y, pill_right, pill_y + pill_h, s(14), s(14));
+                SelectObject(hdc, old_b);
+                SelectObject(hdc, old_p);
+                DeleteObject(pill_brush as HGDIOBJ);
+                DeleteObject(pill_pen as HGDIOBJ);
+
+                // Left vector status indicator dot
+                let dot_x = pill_left + s(16);
+                let dot_y = pill_y + pill_h / 2;
+                draw_vector_status_dot(hdc, dot_x, dot_y, dpi, state.is_dirty, state.save_toast_active);
+
+                let status_text = if state.save_toast_active {
+                    "Saved"
+                } else if state.is_dirty {
+                    "Edited"
+                } else {
+                    "Saved"
+                };
+                let status_color = if state.save_toast_active || !state.is_dirty {
+                    rgb(0x10, 0xB9, 0x81) // Emerald #10B981
+                } else {
+                    rgb(0xF5, 0x9E, 0x0B) // Amber #F59E0B
+                };
+
+                let badge_font = create_ui_font(9.5, 600, dpi);
+                let old_bf = SelectObject(hdc, badge_font as HGDIOBJ);
+                SetTextColor(hdc, status_color);
+                let w_badge = to_wide_null(status_text);
+                TextOutW(hdc, pill_left + s(26), pill_y + s(6), w_badge.as_ptr(), (w_badge.len() - 1) as i32);
+                SelectObject(hdc, old_bf);
+                DeleteObject(badge_font as HGDIOBJ);
+
+                // Document info
+                let doc_font = create_ui_font(9.5, 400, dpi);
+                let old_df = SelectObject(hdc, doc_font as HGDIOBJ);
+                SetTextColor(hdc, rgb(0xED, 0xED, 0xF0));
+                let full_doc_str = if page_info.is_empty() {
+                    filename.to_string()
+                } else {
+                    format!("{} {}", filename, page_info)
+                };
+                let w_doc = to_wide_null(&full_doc_str);
+                TextOutW(hdc, pill_left + s(72), pill_y + s(6), w_doc.as_ptr(), (w_doc.len() - 1) as i32);
+                SelectObject(hdc, old_df);
+                DeleteObject(doc_font as HGDIOBJ);
+            }
         }
     }
 }

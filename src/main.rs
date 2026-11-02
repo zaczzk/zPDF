@@ -144,6 +144,72 @@ fn main() {
         return;
     }
 
+    // Check for --install flag
+    if args.iter().any(|a| a == "--install" || a == "/install" || a == "-i") {
+        match default_app::install_app() {
+            Ok(dir) => {
+                let msg = format!(
+                    "zPDF has been successfully installed!\n\n\
+                    Location:\n{}\n\n\
+                    Start Menu shortcut and .pdf associations have been registered.\n\n\
+                    Would you like to open Windows Default Apps settings to set zPDF as your default PDF viewer?",
+                    dir.display()
+                );
+                let choice = win32_gui::show_message_box(
+                    std::ptr::null_mut(),
+                    "zPDF — Installation Complete",
+                    &msg,
+                    0x00000024, // MB_YESNO | MB_ICONQUESTION
+                );
+                if choice == 6 { // IDYES
+                    default_app::launch_default_apps_settings();
+                }
+            }
+            Err(e) => {
+                win32_gui::show_message_box(
+                    std::ptr::null_mut(),
+                    "zPDF — Installation Failed",
+                    &format!("Failed to install zPDF:\n\n{}", e),
+                    0x00000010, // MB_ICONERROR
+                );
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // Check for --uninstall flag
+    if args.iter().any(|a| a == "--uninstall" || a == "/uninstall" || a == "-u") {
+        let choice = win32_gui::show_message_box(
+            std::ptr::null_mut(),
+            "Uninstall zPDF",
+            "Are you sure you want to uninstall zPDF and remove all shortcuts and file associations?",
+            0x00000024, // MB_YESNO | MB_ICONQUESTION
+        );
+        if choice == 6 { // IDYES
+            match default_app::uninstall_app() {
+                Ok(_) => {
+                    win32_gui::show_message_box(
+                        std::ptr::null_mut(),
+                        "zPDF — Uninstalled",
+                        "zPDF has been successfully uninstalled from your system.",
+                        0x00000040, // MB_ICONINFORMATION
+                    );
+                }
+                Err(e) => {
+                    win32_gui::show_message_box(
+                        std::ptr::null_mut(),
+                        "zPDF — Uninstall Error",
+                        &format!("An error occurred during uninstallation:\n\n{}", e),
+                        0x00000010, // MB_ICONERROR
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        return;
+    }
+
     // Locate PDFium library
     let pdfium_path = match find_pdfium_dll() {
         Some(p) => p,
