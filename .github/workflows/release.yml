@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # Pinned so a public build is reproducible: pdfium binaries from bblanchon/pdfium-binaries.
+  PDFIUM_TAG: chromium/8125
+
 jobs:
   build:
     strategy:
@@ -35,6 +39,19 @@ jobs:
           if ($cargo -ne $rc) { throw "Cargo.toml ($cargo) and resources.rc ($rc) disagree" }
           Write-Host "version $cargo (the linked resources_*.o carries the same FileVersion)"
 
+      - name: PDFium
+        shell: pwsh
+        run: |
+          $tag = $env:PDFIUM_TAG -replace '/', '%2F'
+          $url = "https://github.com/bblanchon/pdfium-binaries/releases/download/$tag/pdfium-win-${{ matrix.arch }}.tgz"
+          curl.exe -fsSL -o pdfium.tgz $url
+          if (!(Test-Path pdfium.tgz) -or (Get-Item pdfium.tgz).Length -lt 100000) { throw "pdfium download failed: $url" }
+          tar -xzf pdfium.tgz
+          $dll = Get-ChildItem -Recurse -Filter pdfium.dll | Select-Object -First 1
+          if (-not $dll) { throw "pdfium.dll missing inside pdfium-win-${{ matrix.arch }}.tgz" }
+          Copy-Item $dll.FullName "pdfium-${{ matrix.arch }}.dll"
+          Get-FileHash "pdfium-${{ matrix.arch }}.dll" -Algorithm SHA256 | Format-List
+
       - name: Build
         run: |
           cargo build --release --locked --target ${{ matrix.target }}
@@ -51,7 +68,8 @@ jobs:
           } elseif (Test-Path "pdfium.dll") {
             Copy-Item "pdfium.dll" "$stage/pdfium.dll"
           } else {
-            Write-Warning "pdfium.dll not present in the repo - users must supply it (see README)"
+            # Never ship a package without the renderer: the app cannot open a PDF without it.
+            throw "pdfium.dll not staged - refusing to build an unusable package"
           }
           Compress-Archive -Path "$stage/*" -DestinationPath "zPDF-${{ matrix.arch }}.zip"
 
