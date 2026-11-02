@@ -17,8 +17,8 @@
 
 ## What it does
 
-* **Opens PDFs instantly** — Cold start in < 30 ms with a locked 120 FPS viewport.
-* **Edits text in-place** — Click any text run to edit directly without rasterization or layout damage.
+* **Opens PDFs instantly** — Cold start in < 30 ms.
+* **Edits text in-place** — Click any text run to edit directly.
 * **Fills forms** — Interactive AcroForms support with mouse, keyboard, and `Tab` field navigation.
 * **Inserts images** — Paste from clipboard (`Ctrl+V`) or import PNG, JPG, BMP, TIFF with an interactive 8-handle transform gizmo.
 * **Stamps reviews** — One-key vector checkmarks (`✓`) and crosses (`✗`) via `V` and `X`.
