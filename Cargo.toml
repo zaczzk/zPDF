@@ -1,6 +1,6 @@
 [package]
 name = "zpdf"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
 authors = ["zaczzk"]
 description = "Fast, tiny, zero-dependency native Rust PDF viewer & editor for Windows"
