@@ -7,7 +7,7 @@
 #endif
 
 #define MyAppName "zPDF"
-#define MyAppVersion "1.1.2"
+#define MyAppVersion "1.1.3"
 #define MyAppPublisher "zPDF"
 #define MyAppURL "https://github.com/zaczzk/zpdf"
 #define MyAppExeName "zpdf.exe"
@@ -87,9 +87,9 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 
 
 [Code]
-// Inno upgrades in place when AppId matches, which is already the case. This adds the two
-// behaviours users expect around it: block a downgrade, and ask before reinstalling the same
-// version. Anything else is a normal upgrade over the existing install.
+// Inno upgrades in place when AppId matches, which is already the case. This adds a heads-up
+// when the machine already has zPDF: a downgrade is allowed but must be confirmed, and the same
+// version asks before being reinstalled. A real upgrade installs without asking.
 const
   UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5C883A7E-873B-492F-A9F7-41E26AE2E651}_is1';
 
@@ -156,8 +156,9 @@ begin
   cmp := CompareVer(prev, '{#MyAppVersion}');
   if cmp > 0 then
   begin
-    MsgBox('zPDF ' + prev + ' is already installed and is newer than this installer (' + '{#MyAppVersion}' + ').' + #13#10 + #13#10 + 'Uninstall it first if you really want to go backwards.', mbError, MB_OK);
-    Result := False;
+    // Downgrade: allowed, but never silent. Default button is No.
+    if MsgBox('This machine already has zPDF ' + prev + ', which is newer than this installer (' + '{#MyAppVersion}' + ').' + #13#10 + #13#10 + 'Install the older version anyway?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDNO then
+      Result := False;
   end
   else if cmp = 0 then
   begin
