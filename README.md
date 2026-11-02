@@ -8,7 +8,7 @@
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-0%20crates-brightgreen.svg)](#what-it-never-does)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20ARM64%20%7C%20x64-crimson.svg)](#building-from-source)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20ARM64%20%7C%20x64-crimson.svg)](#running-zpdf)
 [![Binary Size](https://img.shields.io/badge/Size-~378%20KB-orange.svg)](#what-it-never-does)
 
 </div>
@@ -57,26 +57,6 @@
 | `Ctrl + Scroll` / `+` / `-` | Viewport Zoom (25% – 500%) |
 | `Ctrl + 0` | Reset Zoom to 100% |
 | `PageUp` / `PageDown` / `Home` / `End` | Viewport Navigation |
-
----
-
-## Building from Source
-
-### Prerequisites
-* [Rustup](https://rustup.rs/) (stable toolchain)
-* MinGW LLVM toolchain: `MartinStorsjo.LLVM-MinGW.UCRT` (`winget install MartinStorsjo.LLVM-MinGW.UCRT`)
-
-### ARM64 (Surface Pro / Windows on Snapdragon)
-```powershell
-cargo build --release --target aarch64-pc-windows-gnullvm
-# Output: target/aarch64-pc-windows-gnullvm/release/zpdf.exe (~378 KB)
-```
-
-### x64 (Intel / AMD)
-```powershell
-cargo build --release --target x86_64-pc-windows-gnullvm
-# Output: target/x86_64-pc-windows-gnullvm/release/zpdf.exe (~380 KB)
-```
 
 ---
 

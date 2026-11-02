@@ -4017,7 +4017,7 @@ fn paint_toolbar(state: &mut AppState, hdc: HDC, width: i32) {
         let mut pill_right = center_x + pill_w / 2;
 
         let min_left = state.tb_redo_rect.right + s(12);
-        let max_right = tool_pill_left - s(12);
+        let max_right = act_left - s(12);
         if pill_left < min_left {
             pill_left = min_left;
             pill_right = (pill_left + pill_w).min(max_right);
