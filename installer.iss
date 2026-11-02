@@ -104,6 +104,46 @@ begin
     Result := v;
 end;
 
+// CompareVersion is Delphi-side only; Inno's Pascal Script has no such function.
+function NextVerField(var S: String): Integer;
+var
+  P: Integer;
+begin
+  P := Pos('.', S);
+  if P > 0 then
+  begin
+    Result := StrToIntDef(Copy(S, 1, P - 1), 0);
+    S := Copy(S, P + 1, Length(S));
+  end
+  else
+  begin
+    Result := StrToIntDef(S, 0);
+    S := '';
+  end;
+end;
+
+function CompareVer(A, B: String): Integer;
+var
+  I, NA, NB: Integer;
+begin
+  Result := 0;
+  for I := 1 to 4 do
+  begin
+    NA := NextVerField(A);
+    NB := NextVerField(B);
+    if NA < NB then
+    begin
+      Result := -1;
+      Exit;
+    end;
+    if NA > NB then
+    begin
+      Result := 1;
+      Exit;
+    end;
+  end;
+end;
+
 function InitializeSetup(): Boolean;
 var
   prev: String;
@@ -113,7 +153,7 @@ begin
   prev := InstalledVersion();
   if prev = '' then
     Exit;
-  cmp := CompareVersion(prev, '{#MyAppVersion}');
+  cmp := CompareVer(prev, '{#MyAppVersion}');
   if cmp > 0 then
   begin
     MsgBox('zPDF ' + prev + ' is already installed and is newer than this installer (' + '{#MyAppVersion}' + ').' + #13#10 + #13#10 + 'Uninstall it first if you really want to go backwards.', mbError, MB_OK);
