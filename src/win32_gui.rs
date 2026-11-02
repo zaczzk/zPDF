@@ -2018,7 +2018,7 @@ unsafe extern "system" fn window_proc(
             // Check floating default app banner clicks
             if state.show_default_app_banner && state.banner_rect.contains(x, y) {
                 if state.banner_set_btn_rect.contains(x, y) {
-                    zpdf::default_app::register_prog_id();
+                    let _ = zpdf::default_app::install_app();
                     zpdf::default_app::launch_default_apps_settings();
                     state.show_default_app_banner = false;
                     state.invalidate();
