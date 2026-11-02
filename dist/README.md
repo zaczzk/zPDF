@@ -1,24 +1,26 @@
 # dist
 
-Prebuilt zPDF 1.1.0 binaries, built by GitHub Actions on tag `v1.1.0`.
+Prebuilt zPDF 1.1.1 binaries, built by GitHub Actions on tag `v1.1.1`.
 
-- `zPDF-Setup-arm64.exe` — 2204336 bytes — sha256 `84eb33d92f69664e404df81092aaa644406c671e8e956015130c1a88faa0de05`
-- `zPDF-Setup-x64.exe` — 2226102 bytes — sha256 `1d572127da5ccbe71ccd5b732888f86f33f3b09d09eb5fc686fae5fda3c4b15d`
-- `zPDF-arm64.zip` — 209960 bytes — sha256 `8a1013f50b094e6399958f8908ed53bec99b2b79c7c23646f791e258f9dc2264`
-- `zPDF-x64.zip` — 227657 bytes — sha256 `be6dc4b544bc2bc71828c3b14e08e6029192b1b1d4638b1ce3f9684242374e0d`
+- `zPDF-Setup-arm64.exe` — 4776622 bytes — sha256 `521dc198f098407379632a31899a5199e0e3dcb1682e00cb25680464751b197e`
+- `zPDF-Setup-x64.exe` — 5044062 bytes — sha256 `d96e4c54805d80095ed9866859e92449c4c5fed9886793263eb8e0e93d09a73f`
+- `zPDF-arm64.zip` — 3817493 bytes — sha256 `fc6844e01410f565c9256af0bb615f04f12a04ddfe3e85d5e4629434cb046512`
+- `zPDF-x64.zip` — 4061888 bytes — sha256 `5c7500b0b02cc7aa5bea97982c74f67a2efc5702d3f79af92c979e10145cef20`
 
 Two ways to get zPDF:
 
 - **Installer** (Windows, adds a Start-menu entry and an uninstaller): `zPDF-Setup-x64.exe` or `zPDF-Setup-arm64.exe`.
 - **Portable** (no install, just unzip and run): `zPDF-x64.zip` or `zPDF-arm64.zip`.
 
-These are the same files attached to the [v1.1.0 release](https://github.com/zaczzk/zPDF/releases/tag/v1.1.0).
-Older versions stay on the releases page. `pdfium.dll` ships inside each zip and stays next to `zPDF.exe`.
+`pdfium.dll` is bundled in every download — it must stay in the same folder as `zPDF.exe`, otherwise the app
+opens with a "could not find 'pdfium.dll'" error. The installer places it correctly; with the portable zip,
+unzip the whole archive and run the exe from inside that folder.
 
+These are the same files attached to the [v1.1.1 release](https://github.com/zaczzk/zPDF/releases/tag/v1.1.1).
 Verify before you run:
 
 ```powershell
 Get-FileHash dist\zPDF-Setup-x64.exe -Algorithm SHA256
 ```
 
-The app is portable: no installer required, no network calls, no telemetry.
+The app is portable-friendly: no network calls, no telemetry.
