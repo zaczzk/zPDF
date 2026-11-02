@@ -4,83 +4,75 @@
 
 # zPDF
 
-**Ultra-fast, zero-dependency native PDF viewer and editor for Windows 10 & 11.**
+**Ultra-fast, zero-dependency native PDF viewer & editor for Windows 10 & 11.**
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Zero Dependencies](https://img.shields.io/badge/Dependencies-0%20crates-brightgreen.svg)](#strict-zero-dependency-design)
+[![Zero Dependencies](https://img.shields.io/badge/Dependencies-0%20crates-brightgreen.svg)](#what-it-never-does)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20ARM64%20%7C%20x64-crimson.svg)](#building-from-source)
-[![Binary Size](https://img.shields.io/badge/Size-~378%20KB-orange.svg)](#features)
+[![Binary Size](https://img.shields.io/badge/Size-~378%20KB-orange.svg)](#what-it-never-does)
 
 </div>
 
 ---
 
-## Why zPDF?
+## What it does
 
-Most modern PDF readers are bloated multi-gigabyte Electron shells or web wrappers packed with telemetry, subscriptions, and sluggish startup times. 
-
-**zPDF is built from the ground up to be different:**
-* **378 KB Single Standalone Executable** — Launches cold in under 30 milliseconds.
-* **Strictly 0 External Crates** (`[dependencies]` = empty) — Zero supply chain vulnerability surface. Engineered purely on Rust `std`, Win32/GDI FFI, WIC COM, and the PDFium C ABI.
-* **100% Private & Air-Gapped** — Zero network sockets compiled or linked. Zero analytics. Zero telemetry.
-* **No Subscriptions, No Ads, No Nagging** — Asks once quietly to be your default PDF viewer; if dismissed, it never asks again.
-
----
-
-## Core Capabilities
-
-| Capability | What It Delivers |
-| :--- | :--- |
-| **In-Place Text Editing** | Directly select and edit existing PDF text runs in-place without flattening, rasterizing, or degrading vector fidelity. |
-| **Interactive AcroForms** | Native form filling for interactive text fields, checkboxes, and comboboxes with full keyboard and mouse tab navigation. |
-| **Image Insertion & Gizmo** | Drop or paste images (`Ctrl+V`) from clipboard or file (PNG, JPG, BMP, TIFF) via native Windows Imaging Component (WIC COM) with an interactive 8-handle transform gizmo. |
-| **One-Click Review Stamps** | Resolution-independent vector stamps: Emerald Checkmark (`✓`, `#10B981`) and Crimson Cross (`✗`, `#EF4444`) with instant hotkeys (`V` / `X`). |
-| **True Stream Redaction** | Genuine byte-level stream excision (`FPDFPage_RemoveObject` + `FPDFPage_GenerateContent`) rather than cosmetic overlays. Supports both **Clear Scrubbing** and **Blackline** modes. |
-| **Locked 120 FPS Viewport** | Double-buffered cached GDI backbuffer, LRU bounded tile caching, buffer pooling, and sub-pixel precision touchpad scrolling. |
-| **High-DPI Crystal Sharp** | Per-Monitor v2 DPI-aware rendering (`dpi / 72.0`) guarantees razor-sharp text and graphics on 4K, 150%, and 200% displays. |
-| **Cryptographic DLL Pining** | Built-in pure-Rust SHA-256 engine verifies and pins `pdfium.dll` binary integrity prior to execution. |
+* **Opens PDFs instantly** — Cold start in < 30 ms with a locked 120 FPS viewport.
+* **Edits text in-place** — Click any text run to edit directly without rasterization or layout damage.
+* **Fills forms** — Interactive AcroForms support with mouse, keyboard, and `Tab` field navigation.
+* **Inserts images** — Paste from clipboard (`Ctrl+V`) or import PNG, JPG, BMP, TIFF with an interactive 8-handle transform gizmo.
+* **Stamps reviews** — One-key vector checkmarks (`✓`) and crosses (`✗`) via `V` and `X`.
+* **Redacts securely** — True byte-level stream removal (Clear or Blackline), not cosmetic visual overlays.
+* **Searches with live highlights** — Floating search card (`Ctrl+F`) with wrap-around match navigation.
+* **Manages pages** — Rotate clockwise/counter-clockwise or delete pages via sidebar right-click menu.
+* **Crystal sharp on 4K** — Per-Monitor v2 DPI-aware scaling (`dpi / 72.0`) for high-density displays.
+* **Guarantees cryptographic integrity** — Built-in pure-Rust SHA-256 engine pins and verifies `pdfium.dll`.
 
 ---
 
-## Keyboard Shortcuts
+## What it never does
 
-| Shortcut | Action |
+* **No subscriptions.**
+* **No ads.**
+* **No telemetry, analytics, or network calls** — Completely offline and air-gapped.
+* **No external crate dependencies** — Strictly 0 dependencies in `Cargo.toml`.
+* **No nag screens** — Asks once quietly to be your default PDF app, then never again.
+* **No installer clutter** — Single standalone 378 KB portable `.exe`.
+
+---
+
+## Shortcuts
+
+| Key | Action |
 | :--- | :--- |
 | `Ctrl + O` | Open PDF Document |
-| `Ctrl + S` | Save In-Place (with subtle confirmation toast) |
+| `Ctrl + S` | Save In-Place |
 | `Ctrl + Shift + S` | Save As New Document |
-| `Ctrl + Z` / `Ctrl + Y` | Full Undo / Redo Transaction History |
-| `Ctrl + F` | Floating Search Bar with wrap-around navigation (`Enter` / `Shift+Enter`) |
-| `Ctrl + V` | Paste Image from Clipboard onto Canvas |
-| `Ctrl + Scroll` / `+` / `-` | Smooth Viewport Zoom (clamped 25% – 500%) |
+| `Ctrl + Z` / `Ctrl + Y` | Full Undo / Redo |
+| `Ctrl + F` | Floating Search Bar (`Enter` next, `Shift+Enter` prev) |
+| `Ctrl + V` | Paste Clipboard Image onto Canvas |
+| `V` / `X` | Insert Emerald Checkmark (`✓`) / Crimson Cross (`✗`) Stamp |
+| `Enter` | Commit Active Image Gizmo to PDF |
+| `Esc` | Cancel Active Gizmo or In-Place Text Edit |
+| `Ctrl + Scroll` / `+` / `-` | Viewport Zoom (25% – 500%) |
 | `Ctrl + 0` | Reset Zoom to 100% |
-| `V` / `X` | Place Emerald Checkmark (`✓`) / Crimson Cross (`✗`) Stamp |
-| `Enter` / `Esc` | Commit Active Gizmo / Cancel In-Place Text Edit |
 | `PageUp` / `PageDown` / `Home` / `End` | Viewport Navigation |
-
----
-
-## Windows Smart App Control & SmartScreen
-
-When downloading or running freshly compiled native Windows executables:
-* **Mark of the Web (SmartScreen):** If downloaded from GitHub, right-click `zpdf.exe` &rarr; **Properties** &rarr; check **Unblock** (or run `Unblock-File .\zpdf.exe` in PowerShell).
-* **Smart App Control (SAC):** Windows 11 Smart App Control enforces cloud-reputation checks on newly compiled native binaries. When running locally compiled builds, launch via developer terminal or configure Smart App Control in *Windows Security > App & browser control*.
 
 ---
 
 ## Building from Source
 
 ### Prerequisites
-* [Rustup](https://rustup.rs/) with stable toolchain
+* [Rustup](https://rustup.rs/) (stable toolchain)
 * MinGW LLVM toolchain: `MartinStorsjo.LLVM-MinGW.UCRT` (`winget install MartinStorsjo.LLVM-MinGW.UCRT`)
 
-### ARM64 (Native Windows on Snapdragon / Surface Pro)
+### ARM64 (Surface Pro / Windows on Snapdragon)
 ```powershell
 cargo build --release --target aarch64-pc-windows-gnullvm
 # Output: target/aarch64-pc-windows-gnullvm/release/zpdf.exe (~378 KB)
 ```
 
-### x64 (Native 64-bit Intel / AMD)
+### x64 (Intel / AMD)
 ```powershell
 cargo build --release --target x86_64-pc-windows-gnullvm
 # Output: target/x86_64-pc-windows-gnullvm/release/zpdf.exe (~380 KB)
@@ -90,18 +82,25 @@ cargo build --release --target x86_64-pc-windows-gnullvm
 
 ## Running zPDF
 
-Ensure `pdfium.dll` is located alongside `zpdf.exe`:
+Ensure `pdfium.dll` is in the same folder as `zpdf.exe`:
 
 ```powershell
-# Launch clean landing screen or open file picker
+# Launch empty landing screen or open file picker
 .\zpdf.exe
 
-# Open a specific PDF document directly
+# Open a specific PDF document
 .\zpdf.exe sample.pdf
 
-# Run built-in self-tests & cryptographic verification
+# Run built-in self-tests & integrity checks
 .\zpdf.exe --self-test
 ```
+
+---
+
+## Windows Smart App Control & SmartScreen
+
+* **Mark of the Web (SmartScreen):** If downloaded via a browser, right-click `zpdf.exe` &rarr; **Properties** &rarr; check **Unblock** (or run `Unblock-File .\zpdf.exe`).
+* **Smart App Control (SAC):** If Windows 11 Smart App Control blocks newly compiled local binaries, launch from your developer shell or configure SAC under *Windows Security > App & browser control*.
 
 ---
 
@@ -116,9 +115,9 @@ Releases are built and signed automatically from this repository via GitHub Acti
 
 ---
 
-## Portability & Uninstalling
+## Uninstalling
 
-zPDF is completely portable with zero installer clutter. To uninstall, simply delete the folder containing `zpdf.exe`.
+zPDF is completely portable. Delete the folder containing `zpdf.exe`.
 
 ---
 
