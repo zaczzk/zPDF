@@ -87,9 +87,9 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 
 
 [Code]
-; Inno upgrades in place when AppId matches, which is already the case. This adds the two
-; behaviours users expect around it: block a downgrade, and ask before reinstalling the same
-; version. Anything else is a normal upgrade over the existing install.
+// Inno upgrades in place when AppId matches, which is already the case. This adds the two
+// behaviours users expect around it: block a downgrade, and ask before reinstalling the same
+// version. Anything else is a normal upgrade over the existing install.
 const
   UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{5C883A7E-873B-492F-A9F7-41E26AE2E651}_is1';
 
