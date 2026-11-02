@@ -14,3 +14,5 @@ sample.pdf
 # dist/ is committed on purpose: the prebuilt 1.1.0 binaries live there.
 !dist/*.zip
 !dist/*.exe
+# local review decisions, never shipped
+adversarial_review.json

@@ -64,11 +64,11 @@
 
 zPDF is distributed in two editions on [GitHub Releases](https://github.com/zaczzk/zpdf/releases):
 
-Prebuilt binaries for the current version are also committed in [`dist/`](dist/) if you would rather not use the releases page.
+Prebuilt binaries for the current version are also committed in [`dist/`](dist/) if you would rather not use the releases page. `dist/` is refreshed by hand right after a release finishes, so its checksum list always matches the assets on the newest release — check the release page if `dist/` and the release ever disagree.
 
 * **Portable (`.zip`)** — Extract anywhere and run immediately. No installation required.
 * **Installer (`-Setup.exe`)** — Standard Windows setup wizard with Start Menu shortcuts and automatic `.pdf` file association.
-  Running a newer installer on a machine that already has zPDF **upgrades it in place** — same folder, same uninstall entry, no duplicate installs. A *downgrade* over a newer version asks first (it is never blocked).
+  Running a newer installer on a machine that already has zPDF **upgrades it in place** — same folder, same uninstall entry, no duplicate installs. A *downgrade* is never blocked: an interactive install asks first with **No** preselected, and a silent install (`/SILENT`, `/VERYSILENT`) accepts it automatically.
 
 Ensure `pdfium.dll` is in the same folder as `zpdf.exe`:
 
@@ -99,7 +99,7 @@ Ensure `pdfium.dll` is in the same folder as `zpdf.exe`:
 
 **Free code signing provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).**
 
-Releases are built and signed automatically from this repository via GitHub Actions. Every signing request is cryptographically reviewed and approved by the maintainer.
+Releases are built automatically from this repository via GitHub Actions. zPDF has applied to the SignPath Foundation programme: once approved, every release will be signed automatically and each signing request reviewed and approved by the maintainer. **Until that approval lands, the binaries are unsigned** — Windows SmartScreen will warn on first run, and the SHA-256 checksums in [`dist/`](dist/) are how you verify a download.
 
 * **Committers, Reviewers & Approvers:** [@zaczzk](https://github.com/zaczzk)
 * **Privacy Policy:** Completely offline and air-gapped. zPDF contains 0 network dependencies and connects to no external servers.

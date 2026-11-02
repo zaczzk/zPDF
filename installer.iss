@@ -7,7 +7,7 @@
 #endif
 
 #define MyAppName "zPDF"
-#define MyAppVersion "1.1.4"
+#define MyAppVersion "1.1.5"
 #define MyAppPublisher "zPDF"
 #define MyAppURL "https://github.com/zaczzk/zpdf"
 #define MyAppExeName "zpdf.exe"
@@ -163,9 +163,18 @@ begin
   // (/SILENT or /VERYSILENT). A plain MsgBox here would block a silent run forever.
   if cmp > 0 then
   begin
-    // Downgrade: allowed, never blocked. Default button is No, so an unattended upgrade still goes ahead.
+    // Downgrade: allowed, never blocked. AskConfirm() passes MB_DEFBUTTON2, so the second
+    // button (No) is preselected for a human -- pressing Enter declines. The 4th argument is
+    // only used when the install runs silently (/SILENT, /VERYSILENT), and it is Yes, so a
+    // silent run never blocks and never hangs; silent runs are unattended by definition.
+    Log('zPDF downgrade offered: installed ' + prev + ', installer ' + '{#MyAppVersion}');
     if AskConfirm('This machine already has zPDF ' + prev + ', which is newer than this installer (' + '{#MyAppVersion}' + ').' + #13#10 + #13#10 + 'Install the older version anyway?', IDYES) = IDNO then
+    begin
+      Log('zPDF downgrade declined by the user');
       Result := False;
+    end
+    else
+      Log('zPDF downgrade accepted; installing ' + '{#MyAppVersion}' + ' over ' + prev);
   end
   else if cmp = 0 then
   begin

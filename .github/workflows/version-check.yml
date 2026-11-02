@@ -1,0 +1,25 @@
+name: version metadata
+
+# Cheap gate on every push and PR: every version location (Cargo.toml, Cargo.lock, all four
+# resources.rc fields, installer.iss) must agree before anyone builds a binary by hand.
+# The release workflow runs the identical script, so the two cannot drift.
+on:
+  push:
+    branches: [main]
+    paths: ['Cargo.toml', 'Cargo.lock', 'resources.rc', 'installer.iss', '.github/workflows/version-check.yml', 'scripts/check-versions.ps1']
+  pull_request:
+    paths: ['Cargo.toml', 'Cargo.lock', 'resources.rc', 'installer.iss', '.github/workflows/version-check.yml', 'scripts/check-versions.ps1']
+  workflow_dispatch:
+
+jobs:
+  consistent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Version metadata consistent
+        shell: pwsh
+        run: ./scripts/check-versions.ps1

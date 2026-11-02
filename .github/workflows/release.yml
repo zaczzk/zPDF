@@ -32,12 +32,7 @@ jobs:
 
       - name: Version metadata consistent
         shell: pwsh
-        run: |
-          $pad = { param($v) $p = $v.Split('.'); while ($p.Count -lt 4) { $p += '0' }; ($p[0..3] -join '.') }
-          $cargo = & $pad ((Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value)
-          $rc = & $pad ((Select-String -Path resources.rc -Pattern 'FILEVERSION (.+)').Matches[0].Groups[1].Value -replace ',', '.')
-          if ($cargo -ne $rc) { throw "Cargo.toml ($cargo) and resources.rc ($rc) disagree" }
-          Write-Host "version $cargo (the linked resources_*.o carries the same FileVersion)"
+        run: ./scripts/check-versions.ps1
 
       - name: PDFium
         shell: pwsh
