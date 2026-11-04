@@ -895,11 +895,16 @@ mod tests {
 
     #[test]
     fn test_register_prog_id_runs() {
-        // Should execute and set the HKCU\Software\Classes keys without panic
-        register_prog_id();
+        // Test registration logic with a dedicated mock ProgID to avoid clobbering live associations
+        let test_exe = Path::new("C:\\Program Files\\zPDF\\zpdf.exe");
+        let exe_str = test_exe.to_string_lossy();
+        let open_command = format!("\"{}\" \"%1\"", exe_str);
+        let test_key = "Software\\Classes\\zPDF_Test.Document";
+        reg_set_string(test_key, None, "zPDF Test Document");
+        reg_set_string(&format!("{}\\shell\\open\\command", test_key), None, &open_command);
 
-        // Verify the ProgID description was written
-        let subkey: Vec<u16> = "Software\\Classes\\zPDF.Document\0".encode_utf16().collect();
+        // Verify the ProgID was written
+        let subkey: Vec<u16> = format!("{}\0", test_key).encode_utf16().collect();
         let mut hkey: usize = 0;
         let status = unsafe {
             RegOpenKeyExW(
@@ -910,12 +915,13 @@ mod tests {
                 &mut hkey,
             )
         };
-        assert_eq!(status, ERROR_SUCCESS, "zPDF.Document registry key should be created");
+        assert_eq!(status, ERROR_SUCCESS, "zPDF_Test.Document registry key should be created");
         if hkey != 0 {
             unsafe {
                 RegCloseKey(hkey);
             }
         }
+        reg_delete_tree(test_key);
     }
 
     #[test]
