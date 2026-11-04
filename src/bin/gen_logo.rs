@@ -134,7 +134,7 @@ fn create_ico_entry(size: u32, offset: u32) -> (Vec<u8>, Vec<u8>) {
 }
 
 fn main() -> std::io::Result<()> {
-    let sizes = [48u32, 32, 16];
+    let sizes = [256u32, 128, 64, 48, 32, 16];
     let count = sizes.len() as u16;
 
     let mut dir = Vec::new();

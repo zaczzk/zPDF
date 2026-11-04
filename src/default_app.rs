@@ -28,6 +28,7 @@ pub const ERROR_SUCCESS: i32 = 0;
 
 pub const SHCNE_ASSOCCHANGED: u32 = 0x08000000;
 pub const SHCNF_IDLIST: u32 = 0x0000;
+pub const SHCNF_FLUSH: u32 = 0x1000;
 pub const SW_SHOWNORMAL: i32 = 1;
 
 pub const CLSCTX_INPROC_SERVER: u32 = 1;
@@ -532,7 +533,7 @@ pub fn set_never_ask_default(never: bool) {
 pub fn register_prog_id_for_path(exe_path: &Path) {
     let exe_str = exe_path.to_string_lossy();
     let open_command = format!("\"{}\" \"%1\"", exe_str);
-    let icon_str = format!("{},0", exe_str);
+    let icon_str = format!("\"{}\",0", exe_str);
 
     // 1. zPDF.Document ProgID description
     reg_set_string("Software\\Classes\\zPDF.Document", None, "zPDF Document");
@@ -551,7 +552,12 @@ pub fn register_prog_id_for_path(exe_path: &Path) {
         &open_command,
     );
 
-    // 4. Applications\zpdf.exe registration
+    // 4. Applications\zpdf.exe registration (including DefaultIcon)
+    reg_set_string(
+        "Software\\Classes\\Applications\\zpdf.exe\\DefaultIcon",
+        None,
+        &icon_str,
+    );
     reg_set_string(
         "Software\\Classes\\Applications\\zpdf.exe\\shell\\open\\command",
         None,
@@ -563,7 +569,11 @@ pub fn register_prog_id_for_path(exe_path: &Path) {
         "",
     );
 
-    // 5. OpenWithProgids under .pdf
+    // 5. Direct .pdf extension registration & icon fallback
+    reg_set_string("Software\\Classes\\.pdf", None, "zPDF.Document");
+    reg_set_string("Software\\Classes\\.pdf", Some("Content Type"), "application/pdf");
+    reg_set_string("Software\\Classes\\.pdf", Some("PerceivedType"), "document");
+    reg_set_string("Software\\Classes\\.pdf\\DefaultIcon", None, &icon_str);
     reg_set_string(
         "Software\\Classes\\.pdf\\OpenWithProgids",
         Some("zPDF.Document"),
@@ -596,7 +606,7 @@ pub fn register_prog_id_for_path(exe_path: &Path) {
     unsafe {
         SHChangeNotify(
             SHCNE_ASSOCCHANGED,
-            SHCNF_IDLIST,
+            SHCNF_IDLIST | SHCNF_FLUSH,
             std::ptr::null(),
             std::ptr::null(),
         );
@@ -688,7 +698,7 @@ pub fn install_app() -> Result<PathBuf, String> {
     unsafe {
         SHChangeNotify(
             SHCNE_ASSOCCHANGED,
-            SHCNF_IDLIST,
+            SHCNF_IDLIST | SHCNF_FLUSH,
             std::ptr::null(),
             std::ptr::null(),
         );
@@ -729,7 +739,7 @@ pub fn uninstall_app() -> Result<(), String> {
     unsafe {
         SHChangeNotify(
             SHCNE_ASSOCCHANGED,
-            SHCNF_IDLIST,
+            SHCNF_IDLIST | SHCNF_FLUSH,
             std::ptr::null(),
             std::ptr::null(),
         );
