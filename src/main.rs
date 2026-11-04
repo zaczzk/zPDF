@@ -2,6 +2,7 @@
 // Module: Main Entrypoint & Self-Test Suite
 
 #![allow(dead_code)]
+#![windows_subsystem = "windows"]
 
 pub use zpdf::{default_app, wic_decoder};
 
@@ -17,6 +18,13 @@ use std::sync::Arc;
 
 use pdfium::PdfiumLibrary;
 use security::{harden_process_dll_search_order, verify_pdfium_integrity, Sha256};
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn AttachConsole(dwProcessId: u32) -> i32;
+}
+
+const ATTACH_PARENT_PROCESS: u32 = 0xFFFFFFFF;
 
 fn find_pdfium_dll() -> Option<PathBuf> {
     // 1. Check next to the executable
@@ -137,6 +145,7 @@ fn main() {
 
     // Check for --self-test flag
     if args.iter().any(|a| a == "--self-test" || a == "-t") {
+        unsafe { AttachConsole(ATTACH_PARENT_PROCESS); }
         if let Err(e) = run_self_tests() {
             eprintln!("Self-test failed: {}", e);
             std::process::exit(1);
