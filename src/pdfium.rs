@@ -146,6 +146,7 @@ pub struct PdfiumApi {
     pub FPDF_InitLibraryWithConfig: unsafe extern "C" fn(*const FPDF_LIBRARY_CONFIG),
     pub FPDF_DestroyLibrary: unsafe extern "C" fn(),
     pub FPDF_LoadDocument: unsafe extern "C" fn(*const c_char, *const c_char) -> FPDF_DOCUMENT,
+    pub FPDF_LoadMemDocument: Option<unsafe extern "C" fn(*const c_void, c_int, *const c_char) -> FPDF_DOCUMENT>,
     pub FPDF_CreateNewDocument: unsafe extern "C" fn() -> FPDF_DOCUMENT,
     pub FPDF_CloseDocument: unsafe extern "C" fn(FPDF_DOCUMENT),
     pub FPDF_GetPageCount: unsafe extern "C" fn(FPDF_DOCUMENT) -> c_int,
@@ -294,6 +295,7 @@ impl PdfiumLibrary {
                 FPDF_InitLibraryWithConfig: resolve!(FPDF_InitLibraryWithConfig),
                 FPDF_DestroyLibrary: resolve!(FPDF_DestroyLibrary),
                 FPDF_LoadDocument: resolve!(FPDF_LoadDocument),
+                FPDF_LoadMemDocument: resolve_opt!(FPDF_LoadMemDocument),
                 FPDF_CreateNewDocument: resolve!(FPDF_CreateNewDocument),
                 FPDF_CloseDocument: resolve!(FPDF_CloseDocument),
                 FPDF_GetPageCount: resolve!(FPDF_GetPageCount),
@@ -411,6 +413,30 @@ impl PdfiumLibrary {
         Ok(PdfDocument {
             raw: doc,
             api: Arc::clone(&self.api),
+            _backing_bytes: None,
+        })
+    }
+
+    pub fn open_document_from_bytes(&self, bytes: Vec<u8>) -> Result<PdfDocument, String> {
+        let load_mem = self
+            .api
+            .FPDF_LoadMemDocument
+            .ok_or_else(|| "FPDF_LoadMemDocument not available in PDFium DLL".to_string())?;
+        let boxed: Box<[u8]> = bytes.into_boxed_slice();
+        let doc = unsafe {
+            load_mem(
+                boxed.as_ptr() as *const c_void,
+                boxed.len() as c_int,
+                ptr::null(),
+            )
+        };
+        if doc.is_null() {
+            return Err("PDFium failed to load document from memory buffer".to_string());
+        }
+        Ok(PdfDocument {
+            raw: doc,
+            api: Arc::clone(&self.api),
+            _backing_bytes: Some(boxed),
         })
     }
 
@@ -422,6 +448,7 @@ impl PdfiumLibrary {
         Ok(PdfDocument {
             raw: doc,
             api: Arc::clone(&self.api),
+            _backing_bytes: None,
         })
     }
 }
@@ -442,6 +469,7 @@ use std::os::windows::ffi::OsStrExt;
 pub struct PdfDocument {
     pub raw: FPDF_DOCUMENT,
     pub api: Arc<PdfiumApi>,
+    _backing_bytes: Option<Box<[u8]>>,
 }
 
 unsafe impl Send for PdfDocument {}
@@ -783,6 +811,14 @@ impl PdfPage {
         })
     }
 
+    pub fn select_text_in_rect(&self, rect: RectF) -> (String, Vec<RectF>) {
+        if let Ok(text_page) = self.load_text_page() {
+            text_page.select_text_in_rect(rect)
+        } else {
+            (String::new(), Vec::new())
+        }
+    }
+
     pub fn remove_object(&self, obj: &PdfPageObject) -> bool {
         if let Some(remover) = self.api.FPDFPage_RemoveObject {
             unsafe { remover(self.raw, obj.raw) != 0 }
@@ -1065,6 +1101,132 @@ impl PdfTextPage {
         } else {
             String::new()
         }
+    }
+
+    pub fn get_text_range(&self, start_idx: usize, char_count: usize) -> String {
+        if char_count == 0 {
+            return String::new();
+        }
+        let mut buf: Vec<u16> = vec![0; char_count + 1];
+        let written = unsafe {
+            (self.api.FPDFText_GetText)(
+                self.raw,
+                start_idx as c_int,
+                char_count as c_int,
+                buf.as_mut_ptr(),
+            )
+        };
+        if written > 0 {
+            let actual_len = (written as usize).saturating_sub(1).min(char_count);
+            String::from_utf16_lossy(&buf[..actual_len])
+        } else {
+            String::new()
+        }
+    }
+
+    /// Selects characters within `rect` (or between start/end points) and returns
+    /// both the extracted text string and merged per-line highlight bounding rects.
+    pub fn select_text_in_rect(&self, rect: RectF) -> (String, Vec<RectF>) {
+        let count = self.count_chars();
+        if count == 0 {
+            return (String::new(), Vec::new());
+        }
+
+        let r_left = rect.left.min(rect.right);
+        let r_right = rect.left.max(rect.right);
+        let r_bottom = rect.bottom.min(rect.top);
+        let r_top = rect.bottom.max(rect.top);
+
+        // Try endpoint character lookup first for natural text-flow selection,
+        // and also collect all characters intersecting the selection box.
+        let mut matched_indices = Vec::new();
+        for i in 0..count {
+            if let Some(cb) = self.get_char_box(i) {
+                let c_left = cb.left.min(cb.right);
+                let c_right = cb.left.max(cb.right);
+                let c_bottom = cb.bottom.min(cb.top);
+                let c_top = cb.bottom.max(cb.top);
+                if c_right <= c_left || c_top <= c_bottom {
+                    continue;
+                }
+                let cx = (c_left + c_right) * 0.5;
+                let cy = (c_bottom + c_top) * 0.5;
+                let intersects = (cx >= r_left && cx <= r_right && cy >= r_bottom && cy <= r_top)
+                    || (c_left <= r_right && c_right >= r_left && c_bottom <= r_top && c_top >= r_bottom);
+                if intersects {
+                    matched_indices.push((i, RectF {
+                        left: c_left,
+                        bottom: c_bottom,
+                        right: c_right,
+                        top: c_top,
+                    }));
+                }
+            }
+        }
+
+        if matched_indices.is_empty() {
+            return (String::new(), Vec::new());
+        }
+
+        // Extract text and merge adjacent character boxes on the same line
+        let first_idx = matched_indices.first().unwrap().0;
+        let last_idx = matched_indices.last().unwrap().0;
+
+        // Build extracted string from matched characters (preserving line breaks)
+        let mut out_text = String::new();
+        let mut merged_rects: Vec<RectF> = Vec::new();
+        let mut prev_idx: Option<usize> = None;
+        let mut prev_rect: Option<RectF> = None;
+
+        // If selection is a contiguous range or simple drag, include spaces between words on the same line
+        let _ = (first_idx, last_idx);
+        for &(idx, cbox) in &matched_indices {
+            if let Some(p_idx) = prev_idx {
+                if idx > p_idx + 1 {
+                    // Check if intermediate chars are whitespace on the same line
+                    if let Some(pr) = prev_rect {
+                        let same_line = (cbox.bottom - pr.bottom).abs() < 6.0;
+                        if same_line && idx - p_idx <= 4 {
+                            for gap_i in (p_idx + 1)..idx {
+                                if let Some(ch) = self.get_char_unicode(gap_i) {
+                                    out_text.push(ch);
+                                }
+                            }
+                        } else if !same_line {
+                            out_text.push_str("\r\n");
+                        } else {
+                            out_text.push(' ');
+                        }
+                    }
+                }
+            }
+
+            if let Some(ch) = self.get_char_unicode(idx) {
+                if ch != '\0' {
+                    out_text.push(ch);
+                }
+            }
+
+            if let Some(last_r) = merged_rects.last_mut() {
+                let same_line = (cbox.bottom - last_r.bottom).abs() < 5.0
+                    && (cbox.left - last_r.right).abs() < 18.0;
+                if same_line {
+                    last_r.left = last_r.left.min(cbox.left);
+                    last_r.right = last_r.right.max(cbox.right);
+                    last_r.bottom = last_r.bottom.min(cbox.bottom);
+                    last_r.top = last_r.top.max(cbox.top);
+                } else {
+                    merged_rects.push(cbox);
+                }
+            } else {
+                merged_rects.push(cbox);
+            }
+
+            prev_idx = Some(idx);
+            prev_rect = Some(cbox);
+        }
+
+        (out_text.trim().to_string(), merged_rects)
     }
 
     pub fn search(&self, query: &str, match_case: bool) -> Vec<RectF> {

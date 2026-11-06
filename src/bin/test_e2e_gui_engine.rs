@@ -24,7 +24,7 @@ mod tile_cache;
 mod editor;
 
 use pdfium::{PdfiumLibrary, RectF};
-use editor::{hit_test_text_object, apply_text_mutation, insert_new_text_run, EditAction, UndoManager};
+use editor::{hit_test_text_object, apply_text_mutation, insert_new_text_run, insert_highlight_rect, EditAction, UndoManager};
 use tile_cache::ThumbnailCache;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -352,7 +352,62 @@ fn main() {
     assert_eq!(zoom, 100);
     println!("   -> Zoom shortcut scaling (+/- 15%, 100%) and clamping [25%, 500%]: OK");
 
+    // 10. Test Text Drag-Selection Character Extraction & Highlight Rects
+    println!("[TEST 11/12] Testing Text Drag-Selection Character Extraction & Highlight:");
+    let p0 = doc.load_page(0).expect("Load page 0");
+    let (extracted_text, char_rects) = p0.select_text_in_rect(RectF {
+        left: 50.0,
+        top: 750.0,
+        right: 360.0,
+        bottom: 710.0,
+    });
+    println!("   -> Extracted selection: '{}' ({} merged rects)", extracted_text.trim(), char_rects.len());
+    assert!(!extracted_text.is_empty(), "Expected non-empty text extraction in header region");
+    assert!(!char_rects.is_empty(), "Expected non-empty character bounding boxes");
+
+    let hl_res = insert_highlight_rect(&doc, 0, RectF {
+        left: 54.0,
+        top: 742.0,
+        right: 358.0,
+        bottom: 718.0,
+    });
+    assert!(hl_res.is_ok(), "Insert highlight annotation should succeed");
+    println!("   -> Translucent yellow highlight annotation created: OK");
+
+    // 11. Test Page Insertion/Deletion, Document Snapshots & UndoManager Clearing
+    println!("[TEST 12/12] Testing Blank Page Operations, Memory Snapshots & Stack Lifecycle:");
+    let initial_count = doc.page_count();
+    let new_page_res = doc.new_page(initial_count, 612.0, 792.0);
+    assert!(new_page_res.is_ok(), "Inserting blank page should succeed");
+    assert_eq!(doc.page_count(), initial_count + 1);
+    println!("   -> Blank page added (page count: {}): OK", doc.page_count());
+
+    let deleted = doc.delete_page(initial_count);
+    assert!(deleted, "Deleting inserted page should succeed");
+    assert_eq!(doc.page_count(), initial_count);
+    println!("   -> Blank page deleted and page count restored to {}: OK", doc.page_count());
+
+    // Document in-memory snapshot serialization and loading
+    let snapshot_bytes = doc.save_to_bytes().expect("Save document to in-memory bytes");
+    assert!(!snapshot_bytes.is_empty());
+    let reloaded_doc = lib.open_document_from_bytes(snapshot_bytes).expect("Open document from memory snapshot");
+    assert_eq!(reloaded_doc.page_count(), initial_count);
+    println!("   -> Document memory snapshot round-trip ({} bytes): OK", reloaded_doc.page_count());
+
+    // UndoManager clear
+    let mut undo_mgr = UndoManager::new();
+    undo_mgr.push(EditAction::InsertBlankPage {
+        page_index: 0,
+        width_pt: 612.0,
+        height_pt: 792.0,
+    });
+    assert!(undo_mgr.can_undo());
+    undo_mgr.clear();
+    assert!(!undo_mgr.can_undo());
+    assert!(!undo_mgr.can_redo());
+    println!("   -> UndoManager stack cleared safely: OK");
+
     println!("============================================================");
-    println!(">>> ALL 10 COMPREHENSIVE INTEGRATION SUITES PASSED (100% OK)");
+    println!(">>> ALL 12 COMPREHENSIVE INTEGRATION SUITES PASSED (100% OK)");
     println!("============================================================");
 }

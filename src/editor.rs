@@ -77,14 +77,44 @@ pub enum EditAction {
         page_index: usize,
         object_index: usize,
         text: String,
+        page_x: f64,
+        page_y: f64,
+        font_size: f32,
     },
     InsertImage {
         page_index: usize,
         object_index: usize,
+        width_px: u32,
+        height_px: u32,
+        bgra_pixels: Vec<u8>,
+        page_x: f64,
+        page_y: f64,
+        width_pt: f64,
+        height_pt: f64,
     },
     InsertStamp {
         page_index: usize,
         object_index: usize,
+        checkmark: bool,
+        page_x: f64,
+        page_y: f64,
+        size_pt: f32,
+    },
+    InsertHighlight {
+        page_index: usize,
+        object_index: usize,
+        rect: RectF,
+    },
+    InsertBlankPage {
+        page_index: usize,
+        width_pt: f64,
+        height_pt: f64,
+    },
+    DocumentSnapshot {
+        before_bytes: Vec<u8>,
+        after_bytes: Vec<u8>,
+        active_page_before: usize,
+        active_page_after: usize,
     },
     RemoveObject {
         page_index: usize,
@@ -122,6 +152,11 @@ impl UndoManager {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     pub fn push(&mut self, action: EditAction) {
@@ -399,6 +434,41 @@ pub fn insert_stamp_cross(
 
     if !page.generate_content() {
         return Err("Failed to regenerate page content stream".to_string());
+    }
+
+    let new_idx = page.count_objects().saturating_sub(1);
+    Ok(new_idx)
+}
+
+/// Inserts a translucent Amber/Yellow (`#FACC15`, alpha `0x58`) highlight rectangle on a page.
+pub fn insert_highlight_rect(
+    doc: &PdfDocument,
+    page_index: usize,
+    rect: RectF,
+) -> Result<usize, String> {
+    let page = doc.load_page(page_index)?;
+    let r_min_x = rect.left.min(rect.right);
+    let r_max_x = rect.left.max(rect.right);
+    let r_min_y = rect.bottom.min(rect.top);
+    let r_max_y = rect.bottom.max(rect.top);
+
+    let box_obj = doc
+        .create_path(r_min_x, r_min_y)
+        .ok_or_else(|| "Failed to create highlight path object".to_string())?;
+
+    box_obj.path_line_to(r_max_x, r_min_y);
+    box_obj.path_line_to(r_max_x, r_max_y);
+    box_obj.path_line_to(r_min_x, r_max_y);
+    box_obj.path_close();
+    box_obj.path_set_draw_mode(FPDF_FILLMODE_WINDING, false);
+    box_obj.set_fill_color(0xFA, 0xCC, 0x15, 0x58); // Translucent warm yellow
+
+    if !page.insert_object(&box_obj) {
+        return Err("Failed to insert highlight path into page".to_string());
+    }
+
+    if !page.generate_content() {
+        return Err("Failed to regenerate page content stream after highlight".to_string());
     }
 
     let new_idx = page.count_objects().saturating_sub(1);

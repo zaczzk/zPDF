@@ -29,7 +29,9 @@ pub const WINCODEC_SDK_VERSION1: u32 = 0x0236;
 pub const WINCODEC_SDK_VERSION2: u32 = 0x0237;
 
 pub const CF_DIB: u32 = 8;
+pub const CF_UNICODETEXT: u32 = 13;
 pub const CF_DIBV5: u32 = 17;
+pub const GMEM_MOVEABLE: u32 = 0x0002;
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -352,11 +354,15 @@ extern "system" {
 extern "system" {
     fn OpenClipboard(hWndNewOwner: *mut c_void) -> i32;
     fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
     fn GetClipboardData(uFormat: u32) -> *mut c_void;
+    fn SetClipboardData(uFormat: u32, hMem: *mut c_void) -> *mut c_void;
 }
 
 #[link(name = "kernel32")]
 extern "system" {
+    fn GlobalAlloc(uFlags: u32, dwBytes: usize) -> *mut c_void;
+    fn GlobalFree(hMem: *mut c_void) -> *mut c_void;
     fn GlobalLock(hMem: *mut c_void) -> *mut c_void;
     fn GlobalUnlock(hMem: *mut c_void) -> i32;
     fn GlobalSize(hMem: *mut c_void) -> usize;
@@ -865,6 +871,75 @@ pub fn get_clipboard_image_bgra() -> Option<(u32, u32, Vec<u8>)> {
 
     let slice = unsafe { std::slice::from_raw_parts(ptr_data as *const u8, total_size) };
     parse_dib_to_bgra(slice)
+}
+
+/// Copies a UTF-8 string onto the Windows Clipboard as `CF_UNICODETEXT` (UTF-16LE).
+pub fn set_clipboard_text(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let byte_len = wide.len() * 2;
+
+    unsafe {
+        if OpenClipboard(ptr::null_mut()) == 0 {
+            return false;
+        }
+        let _ = EmptyClipboard();
+
+        let h_mem = GlobalAlloc(GMEM_MOVEABLE, byte_len);
+        if h_mem.is_null() {
+            CloseClipboard();
+            return false;
+        }
+
+        let ptr_mem = GlobalLock(h_mem) as *mut u16;
+        if ptr_mem.is_null() {
+            GlobalFree(h_mem);
+            CloseClipboard();
+            return false;
+        }
+
+        ptr::copy_nonoverlapping(wide.as_ptr(), ptr_mem, wide.len());
+        GlobalUnlock(h_mem);
+
+        let res = SetClipboardData(CF_UNICODETEXT, h_mem);
+        if res.is_null() {
+            GlobalFree(h_mem);
+            CloseClipboard();
+            return false;
+        }
+
+        CloseClipboard();
+        true
+    }
+}
+
+/// Reads `CF_UNICODETEXT` from the Windows Clipboard as a UTF-8 `String`.
+pub fn get_clipboard_text() -> Option<String> {
+    unsafe {
+        if OpenClipboard(ptr::null_mut()) == 0 {
+            return None;
+        }
+        let h_data = GetClipboardData(CF_UNICODETEXT);
+        if h_data.is_null() {
+            CloseClipboard();
+            return None;
+        }
+        let ptr_data = GlobalLock(h_data) as *const u16;
+        if ptr_data.is_null() {
+            CloseClipboard();
+            return None;
+        }
+        let max_u16 = GlobalSize(h_data) / 2;
+        let slice = std::slice::from_raw_parts(ptr_data, max_u16);
+        let len = slice.iter().position(|&c| c == 0).unwrap_or(max_u16);
+        let text = String::from_utf16_lossy(&slice[..len]);
+        GlobalUnlock(h_data);
+        CloseClipboard();
+        Some(text)
+    }
 }
 
 // --- Unit Tests ---
