@@ -20,9 +20,12 @@
 * **Inserts images**: from a file, the clipboard (`Ctrl+V`), or by dropping an image onto the window. Position and resize with the 8-handle gizmo (corners keep the aspect ratio; hold `Shift` to stretch).
 * **Redacts**: drag a box. Text objects and annotations touching it are deleted. Image pixels inside it are overwritten in the saved file, not just covered. Choose *Blackout* or *Erase* by right-clicking the Redact button. Limitation: whole text runs are removed (PDFium can't split them), and content nested inside Form XObjects isn't reached.
 * **Manages pages**: rotate, insert blank pages, delete (with confirmation). Right-click a page or thumbnail.
-* **Finds text**: `Ctrl+F` with live highlights; `Enter` / `Shift+Enter` / `F3` to step through.
+* **Finds text**: `Ctrl+F` with live highlights; `Enter` / `Shift+Enter` / `F3` to step through. Long documents are searched in the background, nearest pages first.
+* **Follows links and bookmarks**: click internal links to jump (`Alt+←` goes back); web links ask before opening in your browser. The sidebar's *Outline* tab lists the document's bookmarks and highlights the section you're in.
+* **Selects text naturally**: drag in reading order, double-click a word, triple-click a line.
+* **Opens password-protected PDFs** with an inline password prompt.
 * **Prints**: `Ctrl+P` through the standard Windows print dialog.
-* **Fits in**: follows the Windows light/dark setting and High Contrast, uses a dark title bar in dark mode, is per-monitor DPI aware, remembers your window position, and lists recent files on the start screen.
+* **Fits in**: follows the Windows light/dark setting and High Contrast, uses a dark title bar in dark mode, is per-monitor DPI aware, remembers your window position, lists recent files on the start screen, and reopens each recent file at the page and zoom you left it at.
 * **Undo everything**: `Ctrl+Z` / `Ctrl+Y` across all edits. Undoing back to the last save clears the "unsaved" marker.
 * **Saves safely**: documents are read into memory, and saving writes a temporary file and renames it over the original, so a crash mid-save can't corrupt the file.
 
@@ -43,6 +46,7 @@
 | `Ctrl+Z` / `Ctrl+Y` (or `Ctrl+Shift+Z`) | Undo / Redo |
 | `Ctrl+F`, `F3` / `Shift+F3` | Find, next / previous match |
 | `Ctrl+G` (or click the page box) | Go to page |
+| `Alt+←` | Back to where you were before following a link |
 | `Ctrl+C` / `Ctrl+V` | Copy selected text / paste an image |
 | `H` `S` `T` `M` | Hand, Select text, Edit text, Highlight |
 | `V` / `X` | Checkmark / cross stamp tool |

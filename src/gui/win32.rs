@@ -266,6 +266,7 @@ pub const WM_CTLCOLOREDIT: u32 = 0x0133;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
+pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_MOUSEWHEEL: u32 = 0x020A;
 pub const WM_MOUSEHWHEEL: u32 = 0x020E;
@@ -288,8 +289,10 @@ pub const WS_EX_ACCEPTFILES: u32 = 0x0000_0010;
 pub const ES_AUTOHSCROLL: u32 = 0x0080;
 pub const ES_NUMBER: u32 = 0x2000;
 pub const ES_CENTER: u32 = 0x0001;
+pub const ES_PASSWORD: u32 = 0x0020;
 pub const CS_HREDRAW: u32 = 0x0002;
 pub const CS_VREDRAW: u32 = 0x0001;
+pub const CS_DBLCLKS: u32 = 0x0008;
 pub const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
 pub const GWLP_WNDPROC: i32 = -4;
 
@@ -462,6 +465,7 @@ extern "system" {
     pub fn SetWindowPlacement(hWnd: HWND, lpwndpl: *const WINDOWPLACEMENT) -> i32;
     pub fn SystemParametersInfoW(uiAction: u32, uiParam: u32, pvParam: *mut c_void, fWinIni: u32) -> i32;
     pub fn GetSysColor(nIndex: i32) -> u32;
+    pub fn GetDoubleClickTime() -> u32;
 }
 
 #[link(name = "gdi32")]
@@ -564,6 +568,7 @@ extern "system" {
     pub fn DragAcceptFiles(hWnd: HWND, fAccept: i32);
     pub fn DragQueryFileW(hDrop: *mut c_void, iFile: u32, lpszFile: *mut u16, cch: u32) -> u32;
     pub fn DragFinish(hDrop: *mut c_void);
+    pub fn ShellExecuteW(hwnd: HWND, op: *const u16, file: *const u16, params: *const u16, dir: *const u16, show: i32) -> isize;
 }
 
 #[link(name = "kernel32")]

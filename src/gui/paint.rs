@@ -42,6 +42,7 @@ pub fn paint(app: &mut App, hdc: HDC) {
         app.paint_toolbar(&mut cv);
         super::search::paint(app, &mut cv);
         paint_banner(app, &mut cv);
+        paint_password(app, &mut cv);
         paint_status(app, &mut cv);
         paint_toast(app, &mut cv);
         paint_tooltip(app, &mut cv);
@@ -201,7 +202,7 @@ fn paint_page_overlays(app: &mut App, cv: &mut Canvas, page: usize) {
     }
     // Drag rectangles
     let drag = match app.drag {
-        Drag::Select { page: p, from, to } if p == page => Some((from, to, false)),
+        Drag::Select { page: p, from, to, anchor: None } if p == page => Some((from, to, false)),
         Drag::Redact { page: p, from, to } if p == page => Some((from, to, true)),
         _ => None,
     };
@@ -255,6 +256,97 @@ fn paint_sidebar(app: &mut App, cv: &mut Canvas) {
     cv.fill(RECT::new(0, top, sw, bottom), t.sidebar);
     cv.fill(RECT::new(sw - 1, top, sw, bottom), t.border);
 
+    let has_outline = app.doc.as_ref().is_some_and(|d| !d.outline.is_empty());
+    if !has_outline {
+        app.sidebar_tab = SidebarTab::Pages;
+    }
+    if app.sidebar_tab == SidebarTab::Outline {
+        paint_outline(app, cv);
+    } else {
+        paint_thumbs(app, cv);
+    }
+
+    // Header drawn last so the list scrolls underneath it.
+    let header = RECT::new(0, top, sw - 1, top + cv.s(36));
+    cv.fill(header, t.sidebar);
+    if has_outline {
+        let half = (sw - cv.s(24)) / 2;
+        app.tab_pages = RECT::xywh(cv.s(12), top + cv.s(6), half, cv.s(26));
+        app.tab_outline = RECT::xywh(cv.s(12) + half, top + cv.s(6), half, cv.s(26));
+        for (r, label, tab, hot) in [
+            (app.tab_pages, "Pages", SidebarTab::Pages, Hot::TabPages),
+            (app.tab_outline, "Outline", SidebarTab::Outline, Hot::TabOutline),
+        ] {
+            let on = app.sidebar_tab == tab;
+            if on {
+                cv.round(r, cv.s(5), t.accent_soft, None);
+            } else if app.hot == Some(hot) {
+                cv.round(r, cv.s(5), t.hover, None);
+            }
+            cv.text(r, label, if on { Font::BodyBold } else { Font::Body }, if on { t.accent } else { t.text_dim }, DT_CENTER);
+        }
+    } else {
+        app.tab_pages = RECT::default();
+        app.tab_outline = RECT::default();
+        let n = app.page_count();
+        cv.text(header.offset(cv.s(16), 0), &format!("{n} page{}", if n == 1 { "" } else { "s" }), Font::Small, t.text_faint, DT_LEFT);
+    }
+}
+
+fn paint_outline(app: &mut App, cv: &mut Canvas) {
+    let t = cv.t;
+    let sw = app.sidebar_width();
+    let top = app.toolbar_h + cv.s(40);
+    let bottom = app.height - app.status_h;
+    let row_h = cv.s(30);
+    let current = app.current_page();
+    // The section the reader is in: the last outline entry pointing at or before this page.
+    let items: Vec<(String, usize, Option<usize>)> = app
+        .doc
+        .as_ref()
+        .map(|d| {
+            d.outline
+                .iter()
+                .map(|o| {
+                    let page = match &o.target {
+                        Some(crate::pdfium::LinkTarget::Page { index, .. }) => Some(*index),
+                        _ => None,
+                    };
+                    (o.title.clone(), o.depth, page)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let active = items.iter().rposition(|(_, _, p)| p.is_some_and(|p| p <= current));
+    app.outline_rows.clear();
+    for (i, (title, depth, page)) in items.iter().enumerate() {
+        let y = top + i as i32 * row_h - app.outline_scroll;
+        let row = RECT::xywh(cv.s(8), y, sw - cv.s(16), row_h - cv.s(2));
+        app.outline_rows.push(row);
+        if row.bottom < top || row.top > bottom {
+            continue;
+        }
+        let on = active == Some(i);
+        if on {
+            cv.round(row, cv.s(5), t.accent_soft, None);
+        } else if app.hot == Some(Hot::OutlineRow(i)) {
+            cv.round(row, cv.s(5), t.hover, None);
+        }
+        let indent = cv.s(10) + (*depth as i32).min(6) * cv.s(12);
+        let num_w = cv.s(30);
+        let fg = if on { t.accent } else if *depth == 0 { t.text } else { t.text_dim };
+        cv.text(RECT::new(row.left + indent, row.top, row.right - num_w, row.bottom), if title.is_empty() { "(untitled)" } else { title }, if *depth == 0 { Font::BodyBold } else { Font::Body }, fg, DT_LEFT);
+        if let Some(p) = page {
+            cv.text(RECT::new(row.right - num_w, row.top, row.right - cv.s(6), row.bottom), &(p + 1).to_string(), Font::Small, t.text_faint, DT_RIGHT);
+        }
+    }
+}
+
+fn paint_thumbs(app: &mut App, cv: &mut Canvas) {
+    let t = cv.t;
+    let sw = app.sidebar_width();
+    let top = app.toolbar_h;
+    let bottom = app.height - app.status_h;
     let current = app.current_page();
     let tw_req = app.thumb_width();
     let deadline = Instant::now() + Duration::from_millis(12);
@@ -292,11 +384,6 @@ fn paint_sidebar(app: &mut App, cv: &mut Canvas) {
     if pending {
         app.timer(TIMER_RENDER, 30);
     }
-    // Header drawn last so thumbnails scroll underneath it.
-    let header = RECT::new(0, top, sw - 1, top + cv.s(32));
-    cv.fill(header, t.sidebar);
-    let n = app.page_count();
-    cv.text(header.offset(cv.s(16), 0), &format!("{n} page{}", if n == 1 { "" } else { "s" }), Font::Small, t.text_faint, DT_LEFT);
 }
 
 // ---------------------------------------------------------------------------
@@ -322,14 +409,19 @@ fn paint_status(app: &mut App, cv: &mut Canvas) {
     let right = format!("{fit}{}%", app.zoom.round() as i32);
     let rw = cv.measure(&right, Font::Small) + cv.s(8);
     cv.text(inner, &right, Font::Small, t.text_dim, DT_RIGHT);
-    let hint = if app.gizmo.is_some() {
+    let link;
+    let hint = if let Some(l) = &app.hover_link {
+        link = super::nav::describe(l);
+        link.as_str()
+    } else if app.gizmo.is_some() {
         "Drag the image or its handles · Enter places it · Esc cancels"
     } else if !app.selection.is_empty() {
         "Ctrl+C copies · right-click to highlight"
     } else {
         app.tool.hint(app.redact_clear)
     };
-    cv.text(RECT::new(inner.left, r.top, inner.right - rw - cv.s(16), r.bottom), hint, Font::Small, t.text_dim, DT_LEFT);
+    let color = if app.hover_link.is_some() { t.accent } else { t.text_dim };
+    cv.text(RECT::new(inner.left, r.top, inner.right - rw - cv.s(16), r.bottom), hint, Font::Small, color, DT_LEFT);
 }
 
 fn paint_toast(app: &mut App, cv: &mut Canvas) {
@@ -406,6 +498,41 @@ fn paint_banner(app: &mut App, cv: &mut Canvas) {
         b.card = card;
         b.yes = yes;
         b.never = never;
+    }
+}
+
+fn paint_password(app: &mut App, cv: &mut Canvas) {
+    let Some(p) = &app.password else { return };
+    let t = cv.t;
+    let s = cv.g.scaler();
+    let (name, wrong, edit) = (p.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), p.wrong, p.edit);
+    // Dim everything behind the card.
+    cv.blend(RECT::new(0, app.toolbar_h, app.width, app.height), rgb(0, 0, 0), if t.dark { 110 } else { 70 });
+    let w = s(400).min(app.width - s(32));
+    let h = s(200);
+    let card = RECT::xywh((app.width - w) / 2, app.toolbar_h + ((app.height - app.toolbar_h - h) / 2).max(s(12)), w, h);
+    cv.shadow(card, s(8));
+    cv.round(card, s(10), t.card, Some(t.border));
+    cv.icon(RECT::xywh(card.left + s(20), card.top + s(18), s(24), s(28)), '\u{E72E}', Font::Icon, t.accent);
+    cv.text(RECT::new(card.left + s(50), card.top + s(18), card.right - s(20), card.top + s(46)), "This PDF is password protected", Font::BodyBold, t.text, DT_LEFT);
+    cv.text(RECT::new(card.left + s(50), card.top + s(44), card.right - s(20), card.top + s(66)), &name, Font::Small, t.text_dim, DT_LEFT);
+    let field = RECT::new(card.left + s(20), card.top + s(80), card.right - s(20), card.top + s(112));
+    cv.round(field, s(5), t.card, Some(if wrong { t.danger } else { t.accent }));
+    unsafe { MoveWindow(edit, field.left + s(10), field.top + s(7), field.width() - s(20), field.height() - s(14), 1) };
+    if wrong {
+        cv.text(RECT::new(field.left, field.bottom + s(4), field.right, field.bottom + s(24)), "That password didn't work. Try again.", Font::Small, t.danger, DT_LEFT);
+    }
+    let bw = s(96);
+    let ok = RECT::xywh(card.right - s(20) - bw, card.bottom - s(50), bw, s(32));
+    let cancel = ok.offset(-bw - s(8), 0);
+    cv.round(ok, s(5), if app.hot == Some(Hot::PasswordOk) { t.selection } else { t.accent }, None);
+    cv.text(ok, "Open", Font::BodyBold, t.on_accent, DT_CENTER);
+    cv.round(cancel, s(5), if app.hot == Some(Hot::PasswordCancel) { t.hover } else { t.card }, Some(t.border));
+    cv.text(cancel, "Cancel", Font::Body, t.text, DT_CENTER);
+    if let Some(p) = &mut app.password {
+        p.card = card;
+        p.ok = ok;
+        p.cancel = cancel;
     }
 }
 

@@ -6,7 +6,7 @@ use super::theme::Theme;
 use super::toolbar::Button;
 use super::win32::*;
 use crate::editor::UndoManager;
-use crate::pdfium::{PdfDocument, PdfFormEnv, PdfPage, PdfiumLibrary, RectF};
+use crate::pdfium::{LinkTarget, OutlineItem, PdfDocument, PdfFormEnv, PdfPage, PdfiumLibrary, RectF};
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
@@ -21,6 +21,7 @@ pub const TIMER_TOOLTIP: usize = 5;
 pub const ID_EDITOR: usize = 1001;
 pub const ID_SEARCH: usize = 1002;
 pub const ID_GOTO: usize = 1003;
+pub const ID_PASSWORD: usize = 1004;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -84,7 +85,8 @@ pub enum Drag {
     Pan { x: i32, y: i32, sx: i32, sy: i32 },
     VThumb { grab: i32 },
     HThumb { grab: i32 },
-    Select { page: usize, from: (f64, f64), to: (f64, f64) },
+    /// `anchor` is the character where the drag started; None means box selection.
+    Select { page: usize, from: (f64, f64), to: (f64, f64), anchor: Option<usize> },
     Redact { page: usize, from: (f64, f64), to: (f64, f64) },
     Gizmo { handle: Handle, mouse: (i32, i32), orig: (f64, f64, f64, f64) },
     /// A press that PDFium's form layer consumed; the release goes there too.
@@ -121,6 +123,30 @@ pub struct Selection {
     pub rects: Vec<(usize, RectF)>,
 }
 
+/// A page and its text layer held for the duration of a text-selection gesture, so mouse moves
+/// don't re-parse the page. Field order matters: the text page closes before its page.
+pub struct SelText {
+    pub text: crate::pdfium::PdfTextPage,
+    /// Kept alive only because `text` borrows its PDFium handle.
+    pub _page: PdfPage,
+    pub index: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    Pages,
+    Outline,
+}
+
+pub struct PasswordPrompt {
+    pub path: PathBuf,
+    pub edit: HWND,
+    pub wrong: bool,
+    pub card: RECT,
+    pub ok: RECT,
+    pub cancel: RECT,
+}
+
 impl Selection {
     pub fn clear(&mut self) {
         self.text.clear();
@@ -146,6 +172,13 @@ pub struct Search {
     pub prev: RECT,
     pub next: RECT,
     pub close: RECT,
+    /// Pages still to search (popped from the back), the query being searched, and whether we
+    /// already scrolled to the first hit.
+    pub pending: Vec<usize>,
+    pub running: String,
+    pub jumped: bool,
+    /// The query changed; the next timer tick restarts the search.
+    pub restart: bool,
 }
 
 impl Default for Search {
@@ -160,6 +193,10 @@ impl Default for Search {
             prev: RECT::default(),
             next: RECT::default(),
             close: RECT::default(),
+            pending: Vec::new(),
+            running: String::new(),
+            jumped: false,
+            restart: false,
         }
     }
 }
@@ -192,6 +229,11 @@ pub enum Hot {
     VScroll,
     HScroll,
     PageBox,
+    TabPages,
+    TabOutline,
+    OutlineRow(usize),
+    PasswordOk,
+    PasswordCancel,
 }
 
 pub struct Doc {
@@ -200,6 +242,7 @@ pub struct Doc {
     pub form: Option<PdfFormEnv>,
     pub pdf: PdfDocument,
     pub path: Option<PathBuf>,
+    pub outline: Vec<OutlineItem>,
     pub history: UndoManager,
     /// Unsaved AcroForm input (not tracked by the undo history).
     pub form_dirty: bool,
@@ -210,7 +253,8 @@ pub struct Doc {
 impl Doc {
     pub fn new(pdf: PdfDocument, path: Option<PathBuf>) -> Self {
         let form = pdf.init_form_env();
-        Doc { pages: PageCache::new(), form, pdf, path, history: UndoManager::new(), form_dirty: false, form_focus: None }
+        let outline = pdf.outline();
+        Doc { pages: PageCache::new(), form, pdf, path, outline, history: UndoManager::new(), form_dirty: false, form_focus: None }
     }
 
     pub fn page(&mut self, idx: usize) -> Option<&PdfPage> {
@@ -295,6 +339,20 @@ pub struct App {
     pub edit_brush: *mut std::ffi::c_void,
     pub wheel_accum: i32,
     pub over_form_field: bool,
+    pub hover_link: Option<LinkTarget>,
+    /// Link pressed in the hand tool; followed on release unless the press turned into a pan.
+    pub pending_link: Option<LinkTarget>,
+    /// Scroll positions to return to with Alt+Left after following links.
+    pub back_stack: Vec<(i32, i32)>,
+    pub sel_text: Option<SelText>,
+    /// (time, x, y, clicks) of the last click, for double/triple-click detection.
+    pub last_click: (Instant, i32, i32, u32),
+    pub sidebar_tab: SidebarTab,
+    pub outline_scroll: i32,
+    pub outline_rows: Vec<RECT>,
+    pub tab_pages: RECT,
+    pub tab_outline: RECT,
+    pub password: Option<PasswordPrompt>,
 
     // Chrome
     pub buttons: Vec<Button>,
@@ -355,6 +413,17 @@ impl App {
             edit_brush: ptr::null_mut(),
             wheel_accum: 0,
             over_form_field: false,
+            hover_link: None,
+            pending_link: None,
+            back_stack: Vec::new(),
+            sel_text: None,
+            last_click: (Instant::now(), 0, 0, 0),
+            sidebar_tab: SidebarTab::Pages,
+            outline_scroll: 0,
+            outline_rows: Vec::new(),
+            tab_pages: RECT::default(),
+            tab_outline: RECT::default(),
+            password: None,
             buttons: Vec::new(),
             page_box: RECT::default(),
             welcome_open: RECT::default(),
@@ -470,6 +539,10 @@ impl Drop for App {
             }
         }
         // Close the document (and its pages/forms) before the PDFium library handle goes away.
+        self.sel_text = None;
+        if let Some(p) = self.password.take() {
+            unsafe { DestroyWindow(p.edit) };
+        }
         self.doc = None;
     }
 }

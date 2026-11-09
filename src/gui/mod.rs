@@ -10,6 +10,7 @@ mod commands;
 mod doc_ops;
 mod gfx;
 mod input;
+mod nav;
 mod paint;
 mod print;
 mod render;
@@ -42,7 +43,7 @@ pub fn run(pdfium: Arc<crate::pdfium::PdfiumLibrary>, initial: Option<PathBuf>) 
         let icon = LoadIconW(instance, 1 as *const u16);
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfnWndProc: input::window_proc,
             cbClsExtra: 0,
             cbWndExtra: 0,
@@ -97,11 +98,12 @@ pub fn run(pdfium: Arc<crate::pdfium::PdfiumLibrary>, initial: Option<PathBuf>) 
         GetClientRect(hwnd, &mut rc);
         app.width = rc.width();
         app.height = rc.height();
+        // Show first so any open error (or the password prompt) has a visible owner.
+        ShowWindow(hwnd, show);
         if let Some(path) = initial {
             doc_ops::open_file(app, &path);
         }
         app.update_title();
-        ShowWindow(hwnd, show);
         UpdateWindow(hwnd);
 
         let mut msg: MSG = std::mem::zeroed();

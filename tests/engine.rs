@@ -98,6 +98,7 @@ fn engine_end_to_end() {
     highlight_annotations(&lib);
     redaction_overwrites_image_data(&lib, &dir);
     redaction_partial_image_text_and_annots(&lib, &dir);
+    navigation_and_passwords(&lib);
     undo_redo_saved_point(&lib);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -297,4 +298,41 @@ fn undo_redo_saved_point(lib: &PdfiumLibrary) {
     }
     assert!(page_has_text(&doc, 0, "Edited"));
     assert!(undo.is_at_saved_point(), "redo back to the save is clean");
+}
+
+/// Outline, links, reading-order text ranges and password handling, against hand-written
+/// fixtures (PDFium can't author outlines or encryption itself).
+fn navigation_and_passwords(lib: &PdfiumLibrary) {
+    use zpdf::pdfium::{LinkTarget, ERR_PASSWORD};
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures");
+
+    let doc = lib.open_document(&fixtures.join("links.pdf"), None).expect("open links.pdf");
+    let outline = doc.outline();
+    let titles: Vec<(&str, usize)> = outline.iter().map(|o| (o.title.as_str(), o.depth)).collect();
+    assert_eq!(
+        titles,
+        [("Chapter 1: Introduction", 0), ("Chapter 2: Middle", 0), ("Chapter 3: End", 0), ("Section 3.1", 1)],
+        "outline is flattened depth-first"
+    );
+    assert_eq!(outline[3].target, Some(LinkTarget::Page { index: 2, y: Some(420.0) }));
+
+    let page = doc.load_page(0).expect("page 1");
+    assert_eq!(doc.link_at(&page, 100.0, 645.0), Some(LinkTarget::Page { index: 2, y: Some(420.0) }), "internal link");
+    assert_eq!(doc.link_at(&page, 100.0, 605.0), Some(LinkTarget::Uri("https://example.com/".into())), "web link");
+    assert_eq!(doc.link_at(&page, 500.0, 100.0), None, "no link in empty space");
+
+    let tp = page.load_text_page().expect("text page");
+    let start = tp.get_char_index_at_pos(76.0, 563.0, 5.0, 5.0).expect("char under 'The'");
+    assert_eq!(tp.text_range(start, 9), "The quick");
+    let rects = tp.range_rects(start, 9);
+    assert_eq!(rects.len(), 1, "a single-line range has one rect");
+    println!("[nav] outline, links and text ranges OK");
+
+    let locked = fixtures.join("locked.pdf");
+    let err = lib.open_document(&locked, None).err().expect("locked.pdf needs a password");
+    assert!(err.contains(ERR_PASSWORD), "unexpected error: {err}");
+    assert!(lib.open_document(&locked, Some("nope")).is_err(), "wrong password rejected");
+    let unlocked = lib.open_document(&locked, Some("test")).expect("right password opens it");
+    assert_eq!(unlocked.page_count(), 1);
+    println!("[nav] password handling OK");
 }

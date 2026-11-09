@@ -35,6 +35,33 @@ pub type FPDF_FONT = *mut c_void;
 pub type FPDF_FORMHANDLE = *mut c_void;
 pub type FPDF_ANNOTATION = *mut c_void;
 pub type FPDF_BOOL = c_int;
+pub type FPDF_LINK = *mut c_void;
+pub type FPDF_DEST = *mut c_void;
+pub type FPDF_ACTION = *mut c_void;
+pub type FPDF_BOOKMARK = *mut c_void;
+
+const PDFACTION_GOTO: c_ulong = 1;
+const PDFACTION_URI: c_ulong = 3;
+
+/// Where a link or bookmark points.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LinkTarget {
+    /// A page in this document, optionally a vertical position on it (PDF points from the bottom).
+    Page { index: usize, y: Option<f32> },
+    /// An external URI (only reported, never opened by this module).
+    Uri(String),
+}
+
+/// One entry of the document outline (bookmarks), flattened depth-first.
+#[derive(Clone, Debug)]
+pub struct OutlineItem {
+    pub title: String,
+    pub depth: usize,
+    pub target: Option<LinkTarget>,
+}
+
+/// Error text returned when a document needs a (different) password.
+pub const ERR_PASSWORD: &str = "password required or incorrect password";
 
 pub const FPDF_PAGEOBJ_TEXT: c_int = 1;
 pub const FPDF_PAGEOBJ_PATH: c_int = 2;
@@ -238,6 +265,23 @@ pdfium_exports! {
     fn FPDFText_GetSchResultIndex(FPDF_SCHHANDLE) -> c_int;
     fn FPDFText_GetSchCount(FPDF_SCHHANDLE) -> c_int;
     fn FPDFText_FindClose(FPDF_SCHHANDLE);
+    fn FPDFText_GetText(FPDF_TEXTPAGE, c_int, c_int, *mut u16) -> c_int;
+    fn FPDFText_CountRects(FPDF_TEXTPAGE, c_int, c_int) -> c_int;
+    fn FPDFText_GetRect(FPDF_TEXTPAGE, c_int, *mut f64, *mut f64, *mut f64, *mut f64) -> FPDF_BOOL;
+
+    fn FPDFLink_GetLinkAtPoint(FPDF_PAGE, f64, f64) -> FPDF_LINK;
+    fn FPDFLink_GetDest(FPDF_DOCUMENT, FPDF_LINK) -> FPDF_DEST;
+    fn FPDFLink_GetAction(FPDF_LINK) -> FPDF_ACTION;
+    fn FPDFAction_GetType(FPDF_ACTION) -> c_ulong;
+    fn FPDFAction_GetDest(FPDF_DOCUMENT, FPDF_ACTION) -> FPDF_DEST;
+    fn FPDFAction_GetURIPath(FPDF_DOCUMENT, FPDF_ACTION, *mut c_void, c_ulong) -> c_ulong;
+    fn FPDFDest_GetDestPageIndex(FPDF_DOCUMENT, FPDF_DEST) -> c_int;
+    fn FPDFDest_GetLocationInPage(FPDF_DEST, *mut FPDF_BOOL, *mut FPDF_BOOL, *mut FPDF_BOOL, *mut f32, *mut f32, *mut f32) -> FPDF_BOOL;
+    fn FPDFBookmark_GetFirstChild(FPDF_DOCUMENT, FPDF_BOOKMARK) -> FPDF_BOOKMARK;
+    fn FPDFBookmark_GetNextSibling(FPDF_DOCUMENT, FPDF_BOOKMARK) -> FPDF_BOOKMARK;
+    fn FPDFBookmark_GetTitle(FPDF_BOOKMARK, *mut c_void, c_ulong) -> c_ulong;
+    fn FPDFBookmark_GetDest(FPDF_DOCUMENT, FPDF_BOOKMARK) -> FPDF_DEST;
+    fn FPDFBookmark_GetAction(FPDF_BOOKMARK) -> FPDF_ACTION;
 
     fn FPDFPage_CountObjects(FPDF_PAGE) -> c_int;
     fn FPDFPage_GetObject(FPDF_PAGE, c_int) -> FPDF_PAGEOBJECT;
@@ -291,6 +335,7 @@ pdfium_exports! {
     fn FORM_OnKeyUp(FPDF_FORMHANDLE, FPDF_PAGE, c_int, c_int) -> FPDF_BOOL;
     fn FORM_OnChar(FPDF_FORMHANDLE, FPDF_PAGE, c_int, c_int) -> FPDF_BOOL;
     fn FORM_ForceToKillFocus(FPDF_FORMHANDLE) -> FPDF_BOOL;
+    fn FPDFPage_HasFormFieldAtPoint(FPDF_FORMHANDLE, FPDF_PAGE, f64, f64) -> c_int;
     fn FORM_GetFocusedAnnot(FPDF_FORMHANDLE, *mut c_int, *mut FPDF_ANNOTATION) -> FPDF_BOOL;
     fn FPDF_FFLDraw(FPDF_FORMHANDLE, FPDF_BITMAP, FPDF_PAGE, c_int, c_int, c_int, c_int, c_int, c_int);
 }
@@ -308,7 +353,7 @@ fn last_error_message(api: &PdfiumApi) -> &'static str {
     match unsafe { (api.FPDF_GetLastError)() } {
         2 => "file not found or could not be opened",
         3 => "file is not a PDF or is corrupted",
-        4 => "password required or incorrect password",
+        4 => ERR_PASSWORD,
         5 => "unsupported security scheme",
         6 => "page not found or content error",
         _ => "unknown error",
@@ -406,6 +451,87 @@ impl Drop for PdfDocument {
 }
 
 impl PdfDocument {
+    fn dest_target(&self, dest: FPDF_DEST) -> Option<LinkTarget> {
+        if dest.is_null() {
+            return None;
+        }
+        let index = unsafe { (self.api.FPDFDest_GetDestPageIndex)(self.raw, dest) };
+        if index < 0 {
+            return None;
+        }
+        let (mut hx, mut hy, mut hz) = (0, 0, 0);
+        let (mut x, mut y, mut z) = (0f32, 0f32, 0f32);
+        let ok = unsafe { (self.api.FPDFDest_GetLocationInPage)(dest, &mut hx, &mut hy, &mut hz, &mut x, &mut y, &mut z) };
+        Some(LinkTarget::Page { index: index as usize, y: (ok != 0 && hy != 0).then_some(y) })
+    }
+
+    fn action_target(&self, action: FPDF_ACTION) -> Option<LinkTarget> {
+        if action.is_null() {
+            return None;
+        }
+        match unsafe { (self.api.FPDFAction_GetType)(action) } {
+            PDFACTION_GOTO => self.dest_target(unsafe { (self.api.FPDFAction_GetDest)(self.raw, action) }),
+            PDFACTION_URI => {
+                let n = unsafe { (self.api.FPDFAction_GetURIPath)(self.raw, action, ptr::null_mut(), 0) } as usize;
+                if n <= 1 {
+                    return None;
+                }
+                let mut buf = vec![0u8; n];
+                unsafe { (self.api.FPDFAction_GetURIPath)(self.raw, action, buf.as_mut_ptr() as *mut c_void, n as c_ulong) };
+                let s = String::from_utf8_lossy(&buf[..n - 1]).trim().to_string();
+                (!s.is_empty()).then_some(LinkTarget::Uri(s))
+            }
+            _ => None,
+        }
+    }
+
+    /// The link under (x, y) in page coordinates, if any.
+    pub fn link_at(&self, page: &PdfPage, x: f64, y: f64) -> Option<LinkTarget> {
+        let link = unsafe { (self.api.FPDFLink_GetLinkAtPoint)(page.raw, x, y) };
+        if link.is_null() {
+            return None;
+        }
+        self.dest_target(unsafe { (self.api.FPDFLink_GetDest)(self.raw, link) })
+            .or_else(|| self.action_target(unsafe { (self.api.FPDFLink_GetAction)(link) }))
+    }
+
+    /// The outline (bookmarks), flattened depth-first. Capped at 5,000 entries and depth 32 to
+    /// stay safe on malformed or cyclic outlines.
+    pub fn outline(&self) -> Vec<OutlineItem> {
+        let mut out = Vec::new();
+        let mut stack: Vec<(FPDF_BOOKMARK, usize)> = Vec::new();
+        let first = unsafe { (self.api.FPDFBookmark_GetFirstChild)(self.raw, ptr::null_mut()) };
+        if !first.is_null() {
+            stack.push((first, 0));
+        }
+        while let Some((bm, depth)) = stack.pop() {
+            if out.len() >= 5000 {
+                break;
+            }
+            let n = unsafe { (self.api.FPDFBookmark_GetTitle)(bm, ptr::null_mut(), 0) } as usize;
+            let mut buf = vec![0u16; n.div_ceil(2).max(1)];
+            if n > 2 {
+                unsafe { (self.api.FPDFBookmark_GetTitle)(bm, buf.as_mut_ptr() as *mut c_void, (buf.len() * 2) as c_ulong) };
+            }
+            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            let title = String::from_utf16_lossy(&buf[..end]).trim().to_string();
+            let target = self
+                .dest_target(unsafe { (self.api.FPDFBookmark_GetDest)(self.raw, bm) })
+                .or_else(|| self.action_target(unsafe { (self.api.FPDFBookmark_GetAction)(bm) }));
+            out.push(OutlineItem { title, depth, target });
+            // Push the sibling first so the child (depth-first) is visited next.
+            let next = unsafe { (self.api.FPDFBookmark_GetNextSibling)(self.raw, bm) };
+            if !next.is_null() && next != bm {
+                stack.push((next, depth));
+            }
+            let child = unsafe { (self.api.FPDFBookmark_GetFirstChild)(self.raw, bm) };
+            if !child.is_null() && depth < 32 {
+                stack.push((child, depth + 1));
+            }
+        }
+        out
+    }
+
     pub fn page_count(&self) -> usize {
         unsafe { (self.api.FPDF_GetPageCount)(self.raw) }.max(0) as usize
     }
@@ -587,6 +713,11 @@ impl PdfFormEnv {
 
     pub fn on_char(&self, page: &PdfPage, char_code: i32, modifier: i32) -> bool {
         unsafe { (self.api.FORM_OnChar)(self.raw, page.raw, char_code, modifier) != 0 }
+    }
+
+    /// True when a form field (widget) lies under (x, y) in page coordinates.
+    pub fn field_at(&self, page: &PdfPage, x: f64, y: f64) -> bool {
+        unsafe { (self.api.FPDFPage_HasFormFieldAtPoint)(self.raw, page.raw, x, y) >= 0 }
     }
 
     /// Removes focus from the focused form field (commits its value).
@@ -884,6 +1015,29 @@ impl PdfTextPage {
     pub fn get_char_index_at_pos(&self, x: f64, y: f64, x_tol: f64, y_tol: f64) -> Option<usize> {
         let idx = unsafe { (self.api.FPDFText_GetCharIndexAtPos)(self.raw, x, y, x_tol, y_tol) };
         (idx >= 0).then_some(idx as usize)
+    }
+
+    /// Text of the characters `start..start+count` in reading order.
+    pub fn text_range(&self, start: usize, count: usize) -> String {
+        if count == 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; count + 1];
+        let n = unsafe { (self.api.FPDFText_GetText)(self.raw, start as c_int, count as c_int, buf.as_mut_ptr()) };
+        let n = (n.max(1) as usize - 1).min(count);
+        String::from_utf16_lossy(&buf[..n])
+    }
+
+    /// Line-by-line highlight rectangles for the characters `start..start+count`.
+    pub fn range_rects(&self, start: usize, count: usize) -> Vec<RectF> {
+        let n = unsafe { (self.api.FPDFText_CountRects)(self.raw, start as c_int, count as c_int) };
+        (0..n.max(0))
+            .filter_map(|i| {
+                let (mut l, mut t, mut r, mut b) = (0f64, 0f64, 0f64, 0f64);
+                let ok = unsafe { (self.api.FPDFText_GetRect)(self.raw, i, &mut l, &mut t, &mut r, &mut b) };
+                (ok != 0).then_some(RectF { left: l as f32, top: t as f32, right: r as f32, bottom: b as f32 })
+            })
+            .collect()
     }
 
     /// Selects characters intersecting `rect` and returns the extracted text

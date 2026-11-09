@@ -1,0 +1,81 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 10 0 R /PageMode /UseOutlines >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 6 0 R /Resources << /Font << /F1 9 0 R >> >> /Annots [14 0 R 15 0 R] >>
+endobj
+4 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 7 0 R /Resources << /Font << /F1 9 0 R >> >> >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 8 0 R /Resources << /Font << /F1 9 0 R >> >> >>
+endobj
+6 0 obj
+<< /Length 398 >>
+stream
+BT /F1 24 Tf 72 700 Td (Chapter 1: Introduction) Tj ET BT /F1 14 Tf 72 640 Td (Jump to chapter 3 \(internal link\)) Tj ET BT /F1 14 Tf 72 600 Td (Visit example.com \(web link\)) Tj ET BT /F1 12 Tf 72 560 Td (The quick brown fox jumps over the lazy dog. Double-click a word to select it.) Tj ET BT /F1 12 Tf 72 544 Td (A second line of text for triple-click and reading-order selection tests.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Length 105 >>
+stream
+BT /F1 24 Tf 72 700 Td (Chapter 2: Middle) Tj ET BT /F1 12 Tf 72 660 Td (needle appears here once.) Tj ET
+endstream
+endobj
+8 0 obj
+<< /Length 124 >>
+stream
+BT /F1 24 Tf 72 700 Td (Chapter 3: End) Tj ET BT /F1 12 Tf 72 400 Td (Section 3.1 starts here at y=400. needle again.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+10 0 obj
+<< /Type /Outlines /First 11 0 R /Last 13 0 R /Count 3 >>
+endobj
+11 0 obj
+<< /Title (Chapter 1: Introduction) /Parent 10 0 R /Next 12 0 R /Dest [3 0 R /XYZ 0 792 0] >>
+endobj
+12 0 obj
+<< /Title (Chapter 2: Middle) /Parent 10 0 R /Prev 11 0 R /Next 13 0 R /Dest [4 0 R /XYZ 0 792 0] >>
+endobj
+13 0 obj
+<< /Title (Chapter 3: End) /Parent 10 0 R /Prev 12 0 R /First 16 0 R /Last 16 0 R /Count 1 /Dest [5 0 R /XYZ 0 792 0] >>
+endobj
+14 0 obj
+<< /Type /Annot /Subtype /Link /Rect [70 635 330 660] /Border [0 0 0] /Dest [5 0 R /XYZ 0 420 0] >>
+endobj
+15 0 obj
+<< /Type /Annot /Subtype /Link /Rect [70 595 300 620] /Border [0 0 0] /A << /S /URI /URI (https://example.com/) >> >>
+endobj
+16 0 obj
+<< /Title (Section 3.1) /Parent 13 0 R /Dest [5 0 R /XYZ 0 420 0] >>
+endobj
+xref
+0 17
+0000000000 65535 f 
+0000000009 00000 n 
+0000000098 00000 n 
+0000000167 00000 n 
+0000000317 00000 n 
+0000000443 00000 n 
+0000000569 00000 n 
+0000001018 00000 n 
+0000001174 00000 n 
+0000001349 00000 n 
+0000001419 00000 n 
+0000001493 00000 n 
+0000001603 00000 n 
+0000001720 00000 n 
+0000001857 00000 n 
+0000001973 00000 n 
+0000002107 00000 n 
+trailer << /Size 17 /Root 1 0 R  >>
+startxref
+2192
+%%EOF

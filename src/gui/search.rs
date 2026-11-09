@@ -58,6 +58,8 @@ pub fn open(app: &mut App) {
 
 pub fn close(app: &mut App) {
     app.search.open = false;
+    app.search.pending.clear();
+    app.search.restart = false;
     app.search.matches.clear();
     app.search.current = None;
     app.kill_timer(TIMER_SEARCH);
@@ -95,37 +97,76 @@ pub fn layout(app: &mut App) {
     }
 }
 
-/// EN_CHANGE: wait for typing to pause before searching every page.
+/// EN_CHANGE: wait for typing to pause before searching.
 pub fn query_changed(app: &mut App) {
     app.search.query = window_text(app.search.edit);
+    app.search.restart = true;
     app.timer(TIMER_SEARCH, 180);
 }
 
+/// Starts a fresh search from the current page onwards, wrapping round to the start.
 pub fn run(app: &mut App) {
-    app.kill_timer(TIMER_SEARCH);
+    app.search.restart = false;
     app.search.matches.clear();
     app.search.current = None;
+    app.search.jumped = false;
+    app.search.pending.clear();
     let q = app.search.query.trim().to_string();
-    if q.is_empty() {
+    app.search.running = q.clone();
+    if q.is_empty() || app.doc.is_none() {
+        app.kill_timer(TIMER_SEARCH);
         app.invalidate();
         return;
     }
-    let start_page = app.current_page();
-    let Some(doc) = app.doc.as_ref() else { return };
-    for i in 0..doc.page_count() {
+    let n = app.page_count();
+    let start = app.current_page().min(n.saturating_sub(1));
+    // Popped from the back: current page first, then onwards, then wrap.
+    app.search.pending = (start..n).chain(0..start).rev().collect();
+    step(app);
+}
+
+/// Searches pages for a short time slice; reschedules itself until every page is done, so long
+/// documents never freeze the window.
+pub fn step(app: &mut App) {
+    if app.search.restart {
+        return run(app);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30);
+    let q = app.search.running.clone();
+    while std::time::Instant::now() < deadline {
+        let Some(page) = app.search.pending.pop() else { break };
+        let Some(doc) = app.doc.as_ref() else { return };
         // Load directly rather than through the page cache so a long search doesn't evict it.
-        let Ok(page) = doc.pdf.load_page(i) else { continue };
-        if let Ok(tp) = page.load_text_page() {
-            for rect in tp.search(&q, false) {
-                app.search.matches.push(SearchMatch { page: i, rect });
+        let Ok(p) = doc.pdf.load_page(page) else { continue };
+        let Ok(tp) = p.load_text_page() else { continue };
+        let found: Vec<_> = tp.search(&q, false).into_iter().map(|rect| SearchMatch { page, rect }).collect();
+        if found.is_empty() {
+            continue;
+        }
+        // Keep matches in page order; shift the current index if we insert before it.
+        let at = app.search.matches.partition_point(|m| m.page < page);
+        let count = found.len();
+        app.search.matches.splice(at..at, found);
+        if let Some(c) = app.search.current.as_mut() {
+            if at <= *c {
+                *c += count;
             }
         }
+        if !app.search.jumped {
+            app.search.jumped = true;
+            select(app, at);
+        }
     }
-    if !app.search.matches.is_empty() {
-        let first = app.search.matches.iter().position(|m| m.page >= start_page).unwrap_or(0);
-        select(app, first);
+    if app.search.pending.is_empty() {
+        app.kill_timer(TIMER_SEARCH);
+    } else {
+        app.timer(TIMER_SEARCH, 1);
     }
     app.invalidate();
+}
+
+pub fn searching(app: &App) -> bool {
+    !app.search.pending.is_empty()
 }
 
 fn select(app: &mut App, idx: usize) {
@@ -148,8 +189,8 @@ fn select(app: &mut App, idx: usize) {
 }
 
 pub fn next(app: &mut App) {
-    // Enter right after typing: flush the pending debounce first.
-    if !app.search.query.trim().is_empty() && app.search.matches.is_empty() {
+    // Enter right after typing: start now instead of waiting for the debounce.
+    if app.search.restart {
         run(app);
         return;
     }
@@ -179,10 +220,15 @@ pub fn paint(app: &mut App, cv: &mut Canvas) {
     let counter_r = RECT::new(app.search.prev.left - cv.s(82), s.top, app.search.prev.left - cv.s(6), s.bottom);
     if !app.search.query.trim().is_empty() {
         if app.search.matches.is_empty() {
-            cv.text(counter_r, "No results", Font::Small, t.danger, DT_RIGHT);
+            if !searching(app) {
+                cv.text(counter_r, "No results", Font::Small, t.danger, DT_RIGHT);
+            } else {
+                cv.text(counter_r, "Searching…", Font::Small, t.text_dim, DT_RIGHT);
+            }
         } else {
             let c = app.search.current.map_or(0, |i| i + 1);
-            cv.text(counter_r, &format!("{c} of {}", app.search.matches.len()), Font::Small, t.text_dim, DT_RIGHT);
+            let more = if searching(app) { "…" } else { "" };
+            cv.text(counter_r, &format!("{c} of {}{more}", app.search.matches.len()), Font::Small, t.text_dim, DT_RIGHT);
         }
     }
     for (r, g, hot) in [

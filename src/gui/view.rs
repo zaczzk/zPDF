@@ -90,6 +90,9 @@ impl App {
         self.target_y = self.target_y.clamp(0.0, my as f64);
         let max_sb = (self.thumb_slots.last().map_or(0, |r| r.bottom + self.s(12)) - (self.height - self.status_h - self.toolbar_h)).max(0);
         self.sidebar_scroll = self.sidebar_scroll.clamp(0, max_sb);
+        let rows = self.doc.as_ref().map_or(0, |d| d.outline.len()) as i32;
+        let max_ol = (rows * self.s(30) + self.s(52) - (self.height - self.status_h - self.toolbar_h)).max(0);
+        self.outline_scroll = self.outline_scroll.clamp(0, max_ol);
     }
 
     /// On-screen rectangle of a page.
@@ -333,7 +336,7 @@ impl App {
     }
 
     pub fn thumb_at(&self, x: i32, y: i32) -> Option<usize> {
-        if x >= self.sidebar_width() || y < self.toolbar_h || y >= self.height - self.status_h {
+        if self.sidebar_tab != SidebarTab::Pages || x >= self.sidebar_width() || y < self.toolbar_h + self.s(36) || y >= self.height - self.status_h {
             return None;
         }
         (0..self.thumb_slots.len()).find(|&i| self.thumb_rect(i).is_some_and(|r| r.inflate(self.s(12), self.s(6)).offset(0, self.s(8)).contains(x, y)))

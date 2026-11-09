@@ -42,30 +42,136 @@ pub fn prompt_open(app: &mut App) {
 }
 
 pub fn open_file(app: &mut App, path: &Path) {
-    let pdf = match app.pdfium.open_document(path, None) {
+    open_with(app, path, None);
+}
+
+fn open_with(app: &mut App, path: &Path, password: Option<&str>) -> bool {
+    let pdf = match app.pdfium.open_document(path, password) {
         Ok(d) => d,
+        Err(e) if e.contains(crate::pdfium::ERR_PASSWORD) => {
+            show_password_prompt(app, path, password.is_some());
+            return false;
+        }
         Err(e) => {
             message_box(app.hwnd, "zPDF", &format!("Couldn't open \"{}\".\n\n{e}", path.display()), MB_ICONERROR);
-            return;
+            return false;
         }
     };
+    remember_position(app);
     cancel_editor(app);
     app.gizmo = None;
     app.selection.clear();
+    app.sel_text = None; // holds a page of the old document
     app.drag = Drag::None;
+    app.back_stack.clear();
+    app.outline_scroll = 0;
     app.doc = None; // close the old document (and its form env) first
     app.doc = Some(Doc::new(pdf, Some(path.to_path_buf())));
     app.scroll_x = 0;
     app.scroll_y = 0;
     app.target_y = 0.0;
     app.sidebar_scroll = 0;
+    // Come back to where the reader left off.
+    let pos = super::settings::position(path);
+    if let Some(p) = pos {
+        app.fit = match p.fit {
+            1 => Fit::Width,
+            2 => Fit::Page,
+            _ => Fit::None,
+        };
+        app.zoom = p.zoom.clamp(super::view::MIN_ZOOM, super::view::MAX_ZOOM);
+    }
     app.structure_changed();
     if app.fit != Fit::None {
         app.relayout();
     }
+    if let Some(p) = pos {
+        let page = p.page.min(app.page_count().saturating_sub(1));
+        app.go_to_page(page);
+        app.scroll_y = app.target_y.round() as i32;
+    }
     app.recent = super::settings::add_recent(path);
     if app.search.open {
         super::search::run(app);
+    }
+    true
+}
+
+/// Records the current page and zoom for the open document (called before closing it).
+pub fn remember_position(app: &App) {
+    let Some(path) = app.doc.as_ref().and_then(|d| d.path.clone()) else { return };
+    let fit = match app.fit {
+        Fit::None => 0,
+        Fit::Width => 1,
+        Fit::Page => 2,
+    };
+    super::settings::save_position(&path, super::settings::Position { page: app.current_page(), zoom: app.zoom, fit });
+}
+
+// ---------------------------------------------------------------------------
+// Password prompt
+// ---------------------------------------------------------------------------
+
+static mut OLD_PW_PROC: isize = 0;
+
+unsafe extern "system" fn password_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let app = super::app_ptr();
+    if !app.is_null() {
+        match (msg, wparam as i32) {
+            (WM_KEYDOWN, VK_RETURN) => {
+                submit_password(&mut *app);
+                return 0;
+            }
+            (WM_KEYDOWN, VK_ESCAPE) => {
+                cancel_password(&mut *app);
+                return 0;
+            }
+            (WM_CHAR, 0x0D) | (WM_CHAR, 0x1B) => return 0,
+            _ => {}
+        }
+    }
+    CallWindowProcW(OLD_PW_PROC, hwnd, msg, wparam, lparam)
+}
+
+fn show_password_prompt(app: &mut App, path: &Path, wrong: bool) {
+    if let Some(p) = &mut app.password {
+        p.wrong = wrong;
+        unsafe {
+            SetWindowTextW(p.edit, wide("").as_ptr());
+            SetFocus(p.edit);
+        }
+        app.invalidate();
+        return;
+    }
+    unsafe {
+        let class = wide("EDIT");
+        let h = CreateWindowExW(0, class.as_ptr(), wide("").as_ptr(), WS_CHILD | WS_VISIBLE | ES_PASSWORD | ES_AUTOHSCROLL, 0, 0, 0, 0, app.hwnd, ID_PASSWORD as HMENU, GetModuleHandleW(ptr::null()), ptr::null_mut());
+        if h.is_null() {
+            return;
+        }
+        SendMessageW(h, WM_SETFONT, app.gfx.font(super::gfx::Font::Body) as WPARAM, 1);
+        OLD_PW_PROC = SetWindowLongPtrW(h, GWLP_WNDPROC, password_proc as *const () as isize);
+        SetFocus(h);
+        app.password = Some(PasswordPrompt { path: path.to_path_buf(), edit: h, wrong, card: RECT::default(), ok: RECT::default(), cancel: RECT::default() });
+    }
+    app.invalidate();
+}
+
+pub fn submit_password(app: &mut App) {
+    let Some(p) = &app.password else { return };
+    let (path, pw) = (p.path.clone(), window_text(p.edit));
+    if open_with(app, &path, Some(&pw)) {
+        cancel_password(app);
+    }
+}
+
+pub fn cancel_password(app: &mut App) {
+    if let Some(p) = app.password.take() {
+        unsafe {
+            DestroyWindow(p.edit);
+            SetFocus(app.hwnd);
+        }
+        app.invalidate();
     }
 }
 
@@ -179,10 +285,12 @@ fn apply(app: &mut App, a: &mut EditAction, forward: bool) -> Result<(), String>
         EditAction::DocumentSnapshot { before_bytes, after_bytes, .. } => {
             let bytes = if forward { after_bytes.clone() } else { before_bytes.clone() };
             let new_pdf = app.pdfium.open_document_from_bytes(bytes)?;
+            app.sel_text = None;
             let doc = app.doc.as_mut().unwrap();
             doc.pages.clear(doc.form.as_ref());
             doc.form = None;
             doc.form = new_pdf.init_form_env();
+            doc.outline = new_pdf.outline();
             doc.pdf = new_pdf;
             doc.form_focus = None;
         }

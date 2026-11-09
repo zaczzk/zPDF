@@ -41,34 +41,85 @@ fn write(name: &str, ty: u32, data: &[u8]) {
     }
 }
 
-pub fn recent_files() -> Vec<PathBuf> {
+/// Where the reader left a document: page index, zoom percent, fit mode (0 none, 1 width, 2 page).
+#[derive(Clone, Copy)]
+pub struct Position {
+    pub page: usize,
+    pub zoom: f64,
+    pub fit: u8,
+}
+
+/// Recent entries are stored as `path<TAB>page<TAB>zoom<TAB>fit`, so positions are pruned along
+/// with the recent list. Plain paths (older format) still load.
+fn entries() -> Vec<(PathBuf, Option<Position>)> {
     let Some(raw) = read("Recent", RRF_RT_REG_MULTI_SZ) else { return Vec::new() };
     let units: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
     units
         .split(|&c| c == 0)
         .filter(|s| !s.is_empty())
-        .map(|s| PathBuf::from(String::from_utf16_lossy(s)))
-        .filter(|p| p.is_file())
+        .map(|s| {
+            let line = String::from_utf16_lossy(s);
+            let mut parts = line.split('\t');
+            let path = PathBuf::from(parts.next().unwrap_or_default());
+            let page = parts.next().and_then(|v| v.parse().ok());
+            let zoom = parts.next().and_then(|v| v.parse().ok());
+            let fit = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let pos = page.zip(zoom).map(|(page, zoom)| Position { page, zoom, fit });
+            (path, pos)
+        })
+        .filter(|(p, _)| p.is_file())
         .take(MAX_RECENT)
         .collect()
 }
 
-/// Moves `path` to the front of the recent list and returns the new list.
-pub fn add_recent(path: &Path) -> Vec<PathBuf> {
-    let mut list = recent_files();
-    let canon = path.to_path_buf();
-    list.retain(|p| !p.as_os_str().eq_ignore_ascii_case(canon.as_os_str()));
-    list.insert(0, canon);
-    list.truncate(MAX_RECENT);
+fn write_entries(list: &[(PathBuf, Option<Position>)]) {
     let mut units: Vec<u16> = Vec::new();
-    for p in &list {
-        units.extend(p.to_string_lossy().encode_utf16());
+    for (p, pos) in list {
+        let mut line = p.to_string_lossy().into_owned();
+        if let Some(pos) = pos {
+            line.push_str(&format!("\t{}\t{:.1}\t{}", pos.page, pos.zoom, pos.fit));
+        }
+        units.extend(line.encode_utf16());
         units.push(0);
     }
     units.push(0);
     let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_le_bytes()).collect();
     write("Recent", REG_MULTI_SZ, &bytes);
-    list
+}
+
+fn same(a: &Path, b: &Path) -> bool {
+    a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+}
+
+pub fn recent_files() -> Vec<PathBuf> {
+    entries().into_iter().map(|(p, _)| p).collect()
+}
+
+pub fn position(path: &Path) -> Option<Position> {
+    entries().into_iter().find(|(p, _)| same(p, path)).and_then(|(_, pos)| pos)
+}
+
+/// Moves `path` to the front of the recent list (keeping its saved position) and returns the list.
+pub fn add_recent(path: &Path) -> Vec<PathBuf> {
+    let mut list = entries();
+    let pos = list.iter().find(|(p, _)| same(p, path)).and_then(|(_, pos)| *pos);
+    list.retain(|(p, _)| !same(p, path));
+    list.insert(0, (path.to_path_buf(), pos));
+    list.truncate(MAX_RECENT);
+    write_entries(&list);
+    list.into_iter().map(|(p, _)| p).collect()
+}
+
+pub fn save_position(path: &Path, pos: Position) {
+    let mut list = entries();
+    match list.iter_mut().find(|(p, _)| same(p, path)) {
+        Some(entry) => entry.1 = Some(pos),
+        None => {
+            list.insert(0, (path.to_path_buf(), Some(pos)));
+            list.truncate(MAX_RECENT);
+        }
+    }
+    write_entries(&list);
 }
 
 pub fn window_placement() -> Option<WINDOWPLACEMENT> {
