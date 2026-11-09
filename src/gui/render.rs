@@ -29,7 +29,12 @@ pub fn render(page: &PdfPage, form: Option<&PdfFormEnv>, x: i32, y: i32, w: i32,
     if w <= 0 || h <= 0 {
         return None;
     }
-    let mut px = vec![0u8; (w * h * 4) as usize];
+    // Refuse absurd sizes instead of overflowing (i32) or exhausting memory.
+    let bytes = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
+    if bytes > 512 << 20 {
+        return None;
+    }
+    let mut px = vec![0u8; bytes];
     page.render_region(&mut px, w, h, w * 4, -x, -y, size_w, size_h, form.map(|f| f.raw)).ok()?;
     Some(Bitmap { w, h, px })
 }
@@ -96,11 +101,14 @@ pub struct RenderCache {
     previews: Lru<usize>,
     thumbs: Lru<(usize, i32)>,
     clock: u64,
+    /// Pages that failed to load or render; skipped until invalidated, so a broken page
+    /// doesn't keep re-arming the render timer.
+    failed: Vec<usize>,
 }
 
 impl RenderCache {
     pub fn new() -> Self {
-        RenderCache { tiles: Lru::new(TILE_BUDGET), previews: Lru::new(PREVIEW_BUDGET), thumbs: Lru::new(THUMB_BUDGET), clock: 0 }
+        RenderCache { tiles: Lru::new(TILE_BUDGET), previews: Lru::new(PREVIEW_BUDGET), thumbs: Lru::new(THUMB_BUDGET), clock: 0, failed: Vec::new() }
     }
 
     fn tick(&mut self) -> u64 {
@@ -146,16 +154,27 @@ impl RenderCache {
         self.thumbs.insert((page, w), bmp, c);
     }
 
+    pub fn mark_failed(&mut self, page: usize) {
+        if !self.failed.contains(&page) {
+            self.failed.push(page);
+        }
+    }
+    pub fn is_failed(&self, page: usize) -> bool {
+        self.failed.contains(&page)
+    }
+
     pub fn invalidate_page(&mut self, page: usize) {
         self.tiles.remove_where(|k| k.0 == page);
         self.previews.remove_where(|k| *k == page);
         self.thumbs.remove_where(|k| k.0 == page);
+        self.failed.retain(|&p| p != page);
     }
 
     pub fn clear(&mut self) {
         self.tiles.clear();
         self.previews.clear();
         self.thumbs.clear();
+        self.failed.clear();
     }
 }
 
@@ -185,7 +204,8 @@ impl PageCache {
         PageCache { pages: Vec::new() }
     }
 
-    pub fn get<'a>(&'a mut self, doc: &PdfDocument, form: Option<&PdfFormEnv>, idx: usize) -> Option<&'a PdfPage> {
+    /// `pin` is a page that must stay loaded (the one whose form field has keyboard focus).
+    pub fn get<'a>(&'a mut self, doc: &PdfDocument, form: Option<&PdfFormEnv>, idx: usize, pin: Option<usize>) -> Option<&'a PdfPage> {
         if let Some(pos) = self.pages.iter().position(|(i, _)| *i == idx) {
             // Move to the back (most recently used).
             let entry = self.pages.remove(pos);
@@ -196,7 +216,8 @@ impl PageCache {
                 f.on_after_load_page(&page);
             }
             if self.pages.len() >= MAX_OPEN_PAGES {
-                let (_, old) = self.pages.remove(0);
+                let victim = self.pages.iter().position(|(i, _)| Some(*i) != pin).unwrap_or(0);
+                let (_, old) = self.pages.remove(victim);
                 if let Some(f) = form {
                     f.on_before_close_page(&old);
                 }

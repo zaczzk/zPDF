@@ -9,9 +9,15 @@ use std::ptr;
 fn content_y(app: &mut App, idx: usize, y_pt: Option<f32>) -> Option<i32> {
     let l = app.layouts.get(idx)?;
     let top = l.y;
+    let (lw, lh) = (l.w_pt, l.h_pt);
     let Some(y) = y_pt else { return Some(top - app.margin() / 2) };
-    let (_, sy) = app.to_screen(idx, 0.0, y as f64)?;
-    Some(sy - app.view_rect().top + app.scroll_y - app.s(12))
+    // A destination is a horizontal line in unrotated PDF space; on a rotated page that line can
+    // run down the screen, so aim for its topmost on-screen point.
+    let rot = app.doc.as_mut().and_then(|d| d.page(idx)).map_or(0, |p| p.rotation());
+    let width = if rot % 2 == 1 { lh } else { lw };
+    let (_, a) = app.to_screen(idx, 0.0, y as f64)?;
+    let (_, b) = app.to_screen(idx, width, y as f64)?;
+    Some(a.min(b) - app.view_rect().top + app.scroll_y - app.s(12))
 }
 
 pub fn follow(app: &mut App, target: &LinkTarget) {
@@ -59,7 +65,7 @@ pub fn go_back(app: &mut App) -> bool {
 
 pub fn link_at(app: &mut App, page: usize, x: f64, y: f64) -> Option<LinkTarget> {
     let doc = app.doc.as_mut()?;
-    let p = doc.pages.get(&doc.pdf, doc.form.as_ref(), page)?;
+    let p = doc.pages.get(&doc.pdf, doc.form.as_ref(), page, doc.form_focus)?;
     doc.pdf.link_at(p, x, y)
 }
 

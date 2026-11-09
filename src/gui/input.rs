@@ -28,8 +28,13 @@ pub unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, 
     let app = &mut *p;
     match msg {
         WM_SIZE => {
-            app.width = (lparam & 0xFFFF) as i32;
-            app.height = ((lparam >> 16) & 0xFFFF) as i32;
+            let (w, h) = ((lparam & 0xFFFF) as i32, ((lparam >> 16) & 0xFFFF) as i32);
+            // Minimizing reports 0x0; laying out for that would clamp the scroll position to 0.
+            if wparam == 1 || w == 0 || h == 0 {
+                return 0;
+            }
+            app.width = w;
+            app.height = h;
             app.relayout();
             search::layout(app);
             app.invalidate();
@@ -42,11 +47,14 @@ pub unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, 
             0
         }
         WM_DPICHANGED => {
+            // The in-place editor's font is sized for the old DPI; commit rather than resize it.
+            doc_ops::commit_editor(app);
             app.gfx.set_dpi((wparam & 0xFFFF) as u32);
             app.apply_metrics();
             app.cache.clear();
             app.relayout();
-            for h in [app.search.edit, app.goto_edit] {
+            let pw = app.password.as_ref().map_or(ptr::null_mut(), |p| p.edit);
+            for h in [app.search.edit, app.goto_edit, pw] {
                 if !h.is_null() {
                     SendMessageW(h, WM_SETFONT, app.gfx.font(super::gfx::Font::Body) as WPARAM, 1);
                 }
@@ -54,6 +62,16 @@ pub unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, 
             let r = *(lparam as *const RECT);
             MoveWindow(hwnd, r.left, r.top, r.width(), r.height(), 1);
             0
+        }
+        WM_ACTIVATE | WM_SETFOCUS => {
+            // Returning to the window: keep typing in the password box while it is open.
+            let r = DefWindowProcW(hwnd, msg, wparam, lparam);
+            if let Some(p) = &app.password {
+                if msg == WM_SETFOCUS || (wparam & 0xFFFF) != 0 {
+                    SetFocus(p.edit);
+                }
+            }
+            r
         }
         WM_SETTINGCHANGE | WM_THEMECHANGED => {
             app.apply_theme();
@@ -249,6 +267,11 @@ fn kill_form_focus(app: &mut App) {
 // ---------------------------------------------------------------------------
 
 fn on_key_down(app: &mut App, vk: i32) -> bool {
+    // The password prompt is modal: never act on the (previous) document behind it.
+    if let Some(p) = &app.password {
+        unsafe { SetFocus(p.edit) };
+        return true;
+    }
     let ctrl = key_down(VK_CONTROL);
     // A focused form field gets keys first; plain letters never reach the tool shortcuts.
     if let Some(page) = app.doc.as_ref().and_then(|d| d.form_focus) {
@@ -445,6 +468,11 @@ fn on_left_down(app: &mut App, x: i32, y: i32) {
     }
     if (app.search.open && app.search.card.contains(x, y)) || app.banner.as_ref().is_some_and(|b| b.card.contains(x, y)) || app.doc.is_none() {
         return;
+    }
+    // Clicking the document takes keyboard focus back from the find, go-to or other boxes, so
+    // shortcuts, arrows and form typing reach the document.
+    if unsafe { GetFocus() } != app.hwnd {
+        unsafe { SetFocus(app.hwnd) };
     }
     if let Some(i) = app.thumb_at(x, y) {
         doc_ops::commit_editor(app);
@@ -720,6 +748,9 @@ fn on_right_up(app: &mut App, x: i32, y: i32) {
 }
 
 fn on_wheel(app: &mut App, delta: i32, horizontal: bool, ctrl: bool, shift: bool, x: i32, y: i32) {
+    if app.password.is_some() {
+        return;
+    }
     if app.doc.is_none() {
         return;
     }
@@ -832,12 +863,43 @@ fn gizmo_hit(app: &mut App, x: i32, y: i32) -> Option<Handle> {
     r.contains(x, y).then_some(Handle::Move)
 }
 
+/// A handle grabbed on screen, expressed as the edge(s) it moves in unrotated PDF space.
+/// /Rotate turns the page clockwise, so screen east is PDF north at 90°, west at 180°, south at 270°.
+fn screen_to_pdf_handle(h: Handle, rot: i32) -> Handle {
+    // Directions as N=0, E=1, S=2, W=3.
+    let (v, hz) = match h {
+        Handle::Move => return Handle::Move,
+        Handle::N => (Some(0), None),
+        Handle::S => (Some(2), None),
+        Handle::E => (None, Some(1)),
+        Handle::W => (None, Some(3)),
+        Handle::NE => (Some(0), Some(1)),
+        Handle::NW => (Some(0), Some(3)),
+        Handle::SE => (Some(2), Some(1)),
+        Handle::SW => (Some(2), Some(3)),
+    };
+    let turn = |d: i32| (d - rot).rem_euclid(4);
+    let dirs: Vec<i32> = v.into_iter().chain(hz).map(turn).collect();
+    let has = |d: i32| dirs.contains(&d);
+    match (has(0), has(2), has(1), has(3)) {
+        (true, _, true, _) => Handle::NE,
+        (true, _, _, true) => Handle::NW,
+        (_, true, true, _) => Handle::SE,
+        (_, true, _, true) => Handle::SW,
+        (true, ..) => Handle::N,
+        (_, true, ..) => Handle::S,
+        (_, _, true, _) => Handle::E,
+        _ => Handle::W,
+    }
+}
+
 fn drag_gizmo(app: &mut App, handle: Handle, mouse: (i32, i32), orig: (f64, f64, f64, f64), x: i32, y: i32) {
-    let Some(g) = app.gizmo.as_ref() else { return };
-    let Some(l) = app.layouts.get(g.page) else { return };
-    let scale = l.w as f64 / l.w_pt.max(1.0);
-    let dx = (x - mouse.0) as f64 / scale;
-    let dy = -(y - mouse.1) as f64 / scale; // PDF y grows upwards
+    let Some(page) = app.gizmo.as_ref().map(|g| g.page) else { return };
+    // Measure the drag in PDF space, so it is right on rotated pages too.
+    let (Some(a), Some(b)) = (app.to_pdf(page, mouse.0, mouse.1), app.to_pdf(page, x, y)) else { return };
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let rot = app.doc.as_mut().and_then(|d| d.page(page)).map_or(0, |p| p.rotation());
+    let handle = screen_to_pdf_handle(handle, rot);
     let (ox, oy, ow, oh) = orig;
     let min = 8.0;
     let (mut nx, mut ny, mut nw, mut nh) = (ox, oy, ow, oh);
@@ -941,4 +1003,27 @@ pub fn end_goto(app: &mut App, accept: bool) {
         }
     }
     app.invalidate();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotated_handles_map_to_pdf_edges() {
+        // Unrotated: identity.
+        for h in [Handle::N, Handle::E, Handle::S, Handle::W, Handle::NE, Handle::SW, Handle::Move] {
+            assert_eq!(screen_to_pdf_handle(h, 0), h);
+        }
+        // /Rotate 90 (clockwise): the PDF's top edge is on the screen's right.
+        assert_eq!(screen_to_pdf_handle(Handle::E, 1), Handle::N);
+        assert_eq!(screen_to_pdf_handle(Handle::S, 1), Handle::E);
+        assert_eq!(screen_to_pdf_handle(Handle::N, 1), Handle::W);
+        assert_eq!(screen_to_pdf_handle(Handle::SE, 1), Handle::NE);
+        // 180: everything flips.
+        assert_eq!(screen_to_pdf_handle(Handle::NE, 2), Handle::SW);
+        // 270: the PDF's top edge is on the screen's left.
+        assert_eq!(screen_to_pdf_handle(Handle::W, 3), Handle::N);
+        assert_eq!(screen_to_pdf_handle(Handle::NW, 3), Handle::NE);
+    }
 }

@@ -258,12 +258,12 @@ impl Doc {
     }
 
     pub fn page(&mut self, idx: usize) -> Option<&PdfPage> {
-        self.pages.get(&self.pdf, self.form.as_ref(), idx)
+        self.pages.get(&self.pdf, self.form.as_ref(), idx, self.form_focus)
     }
 
     pub fn page_and_form(&mut self, idx: usize) -> Option<(&PdfPage, Option<&PdfFormEnv>)> {
         let form = self.form.as_ref();
-        let page = self.pages.get(&self.pdf, form, idx)?;
+        let page = self.pages.get(&self.pdf, form, idx, self.form_focus)?;
         Some((page, form))
     }
 
@@ -494,20 +494,33 @@ impl App {
     /// Call after any change to page content: drops caches for that page and refreshes chrome.
     pub fn page_changed(&mut self, page: usize) {
         self.cache.invalidate_page(page);
+        self.sel_text = None;
         if let Some(d) = &mut self.doc {
             d.pages.forget(d.form.as_ref(), page);
+            // Closing the page handle drops PDFium's field focus on it.
+            if d.form_focus == Some(page) {
+                d.form_focus = None;
+            }
         }
         self.update_title();
         self.invalidate();
     }
 
-    /// Call after pages were added, removed, rotated or the document was replaced.
+    /// Call after pages were added, removed, rotated or the document was replaced. Everything
+    /// that refers to pages by index is rebuilt or dropped.
     pub fn structure_changed(&mut self) {
         self.cache.clear();
+        self.sel_text = None;
+        self.selection.clear();
         if let Some(d) = &mut self.doc {
             d.pages.clear(d.form.as_ref());
+            d.form_focus = None;
+            d.outline = d.pdf.outline();
         }
         self.relayout();
+        if self.search.open && !self.search.query.trim().is_empty() {
+            super::search::run(self);
+        }
         self.update_title();
         self.invalidate();
     }

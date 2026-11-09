@@ -249,6 +249,8 @@ pub struct BLENDFUNCTION {
 // Messages
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_SIZE: u32 = 0x0005;
+pub const WM_ACTIVATE: u32 = 0x0006;
+pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_ERASEBKGND: u32 = 0x0014;
@@ -431,6 +433,7 @@ extern "system" {
     pub fn LoadIconW(hInstance: HINSTANCE, lpIconName: *const u16) -> HICON;
     pub fn SetCursor(hCursor: *mut c_void) -> *mut c_void;
     pub fn SetFocus(hWnd: HWND) -> HWND;
+    pub fn GetFocus() -> HWND;
     pub fn SendMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;
     pub fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) -> isize;
     pub fn CallWindowProcW(lpPrevWndFunc: isize, hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LPARAM) -> LRESULT;

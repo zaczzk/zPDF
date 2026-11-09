@@ -13,10 +13,23 @@ const PDF_FILTER: &str = "PDF documents (*.pdf)\0*.pdf\0All files (*.*)\0*.*\0";
 // Open / save
 // ---------------------------------------------------------------------------
 
+/// PDFium writes a form field's value only when the field loses focus, so take focus away before
+/// saving, snapshotting or closing; otherwise the last typed value is lost.
+pub fn commit_form(app: &mut App) {
+    if let Some(d) = &mut app.doc {
+        if d.form_focus.take().is_some() {
+            if let Some(f) = &d.form {
+                f.kill_focus();
+            }
+        }
+    }
+}
+
 /// Asks to save unsaved changes. Returns false if the user cancelled.
 pub fn confirm_discard(app: &mut App) -> bool {
     commit_editor(app);
     commit_gizmo(app);
+    commit_form(app);
     let Some(doc) = &app.doc else { return true };
     if !doc.is_dirty() {
         return true;
@@ -178,6 +191,7 @@ pub fn cancel_password(app: &mut App) {
 pub fn save(app: &mut App, save_as: bool) {
     commit_editor(app);
     commit_gizmo(app);
+    commit_form(app);
     let Some(doc) = &app.doc else { return };
     let target = match (&doc.path, save_as) {
         (Some(p), false) => p.clone(),
@@ -323,6 +337,12 @@ pub fn redo(app: &mut App) {
 
 fn step_history(app: &mut App, forward: bool) {
     commit_editor(app);
+    // With an image still being placed, undo cancels the placement instead of the last edit.
+    if app.gizmo.take().is_some() {
+        app.invalidate();
+        return;
+    }
+    commit_form(app);
     let Some(doc) = app.doc.as_mut() else { return };
     let taken = if forward { doc.history.take_redo() } else { doc.history.take_undo() };
     let Some(mut entry) = taken else { return };
@@ -348,6 +368,7 @@ fn step_history(app: &mut App, forward: bool) {
 // ---------------------------------------------------------------------------
 
 pub fn rotate(app: &mut App, page: usize, quarter_turns: i32) {
+    commit_gizmo(app);
     let Some(doc) = &app.doc else { return };
     let Ok(p) = doc.pdf.load_page(page) else { return };
     let old = p.rotation();
@@ -359,6 +380,7 @@ pub fn rotate(app: &mut App, page: usize, quarter_turns: i32) {
 }
 
 pub fn insert_blank(app: &mut App, at: usize) {
+    commit_gizmo(app);
     let Some(doc) = &app.doc else { return };
     let count = doc.page_count();
     let at = at.min(count);
@@ -373,6 +395,7 @@ pub fn insert_blank(app: &mut App, at: usize) {
 }
 
 pub fn delete_page(app: &mut App, page: usize) {
+    commit_gizmo(app);
     let count = app.page_count();
     if count <= 1 {
         return;
@@ -381,11 +404,16 @@ pub fn delete_page(app: &mut App, page: usize) {
     if message_box(app.hwnd, "Delete page", &msg, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES {
         return;
     }
-    snapshot_edit(app, page, page.min(count - 2), |pdf| if pdf.delete_page(page) { Ok(()) } else { Err("delete failed".into()) });
+    let after = page.min(count - 2);
+    if snapshot_edit(app, page, after, |pdf| if pdf.delete_page(page) { Ok(()) } else { Err("delete failed".into()) }) {
+        app.structure_changed();
+        app.go_to_page(after);
+    }
 }
 
 /// Runs an edit that the engine can't invert precisely, recording before/after document bytes.
 fn snapshot_edit(app: &mut App, page_before: usize, page_after: usize, f: impl FnOnce(&crate::pdfium::PdfDocument) -> Result<(), String>) -> bool {
+    commit_form(app);
     let Some(doc) = &app.doc else { return false };
     let Ok(before) = doc.pdf.save_to_bytes() else { return false };
     if let Err(e) = f(&doc.pdf) {
@@ -462,14 +490,18 @@ pub fn copy_selection(app: &mut App) {
 pub fn start_image(app: &mut App, w: u32, h: u32, pixels: Vec<u8>) {
     let page = app.current_page();
     let Some(l) = app.layouts.get(page) else { return };
+    let (lw, lh) = (l.w_pt, l.h_pt);
+    // The gizmo lives in unrotated PDF space; layout sizes already include /Rotate.
+    let rot = app.doc.as_mut().and_then(|d| d.page(page)).map_or(0, |p| p.rotation());
+    let (pw, ph) = if rot % 2 == 1 { (lh, lw) } else { (lw, lh) };
     let aspect = w as f64 / h.max(1) as f64;
-    let mut gw = (l.w_pt * 0.4).min(w as f64 * 0.75);
+    let mut gw = (pw * 0.4).min(w as f64 * 0.75);
     let mut gh = gw / aspect;
-    if gh > l.h_pt * 0.4 {
-        gh = l.h_pt * 0.4;
+    if gh > ph * 0.4 {
+        gh = ph * 0.4;
         gw = gh * aspect;
     }
-    app.gizmo = Some(ImageGizmo { page, x: (l.w_pt - gw) / 2.0, y: (l.h_pt - gh) / 2.0, w: gw, h: gh, px_w: w, px_h: h, pixels });
+    app.gizmo = Some(ImageGizmo { page, x: (pw - gw) / 2.0, y: (ph - gh) / 2.0, w: gw, h: gh, px_w: w, px_h: h, pixels });
     app.toast("Drag to position · Enter to place · Esc to cancel", ToastKind::Info);
 }
 
@@ -534,7 +566,12 @@ unsafe extern "system" fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 // Let the EDIT control handle its own clipboard / select-all / undo.
                 0x41 | 0x43 | 0x56 | 0x58 if key_down(VK_CONTROL) => {}
                 0x5A if key_down(VK_CONTROL) && !key_down(VK_SHIFT) && SendMessageW(hwnd, EM_CANUNDO, 0, 0) != 0 => {}
-                vk if key_down(VK_CONTROL) => {
+                // Only real app shortcuts leave the editor. Ctrl on its own, Ctrl+arrows,
+                // Ctrl+Backspace/Delete/Home/End and AltGr (Ctrl+Alt) characters stay in the EDIT.
+                vk if key_down(VK_CONTROL)
+                    && !key_down(VK_MENU)
+                    && (matches!(vk, 0x30..=0x39 | 0x41..=0x5A) || matches!(vk, VK_OEM_PLUS | VK_OEM_MINUS | VK_ADD | VK_SUBTRACT)) =>
+                {
                     commit_editor(app);
                     super::commands::shortcut(app, vk);
                     return 0;

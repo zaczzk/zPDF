@@ -95,11 +95,16 @@ impl App {
         self.outline_scroll = self.outline_scroll.clamp(0, max_ol);
     }
 
+    /// Offset that centres content narrower than the view.
+    pub fn content_left(&self) -> i32 {
+        ((self.view_rect().width() - self.content_w) / 2).max(0)
+    }
+
     /// On-screen rectangle of a page.
     pub fn page_rect(&self, idx: usize) -> Option<RECT> {
         let l = self.layouts.get(idx)?;
         let v = self.view_rect();
-        let content_left = if self.content_w < v.width() { (v.width() - self.content_w) / 2 } else { 0 };
+        let content_left = self.content_left();
         let x = v.left + content_left + (self.content_w - l.w) / 2 - self.scroll_x;
         let y = v.top + l.y - self.scroll_y;
         Some(RECT::xywh(x, y, l.w, l.h))
@@ -201,12 +206,13 @@ impl App {
         }
         let v = self.view_rect();
         let (ax, ay) = anchor.unwrap_or(v.center());
-        // Keep the document point under the anchor fixed.
-        let fx = (self.scroll_x + ax - v.left) as f64 / self.content_w.max(1) as f64;
+        // Keep the document point under the anchor fixed. Narrow content is centred in the view,
+        // so measure from the content's left edge, not the view's.
+        let fx = (self.scroll_x + ax - v.left - self.content_left()) as f64 / self.content_w.max(1) as f64;
         let fy = (self.scroll_y + ay - v.top) as f64 / self.content_h.max(1) as f64;
         self.zoom = zoom;
         self.relayout();
-        self.scroll_x = (fx * self.content_w as f64).round() as i32 - (ax - v.left);
+        self.scroll_x = (fx * self.content_w as f64).round() as i32 - (ax - v.left - self.content_left());
         self.scroll_y = (fy * self.content_h as f64).round() as i32 - (ay - v.top);
         self.clamp_scroll();
         self.target_y = self.scroll_y as f64;

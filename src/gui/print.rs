@@ -29,7 +29,8 @@ pub fn print(app: &mut App) {
         (0, count as usize)
     };
     let hdc = pd.hDC;
-    let result = print_pages(app, hdc, from, to);
+    let copies = pd.nCopies.max(1) as usize;
+    let result = (0..copies).try_fold(0, |n, _| print_pages(app, hdc, from, to).map(|p| n + p));
     unsafe {
         DeleteDC(hdc);
         if !pd.hDevMode.is_null() {
@@ -59,8 +60,10 @@ fn print_pages(app: &mut App, hdc: HDC, from: usize, to: usize) -> Result<usize,
     let mut printed = 0;
     for i in from..to {
         let (w_pt, h_pt) = doc.pdf.page_size(i).unwrap_or((612.0, 792.0));
-        let rw = (w_pt as f64 * render_dpi / 72.0).round() as i32;
-        let rh = (h_pt as f64 * render_dpi / 72.0).round() as i32;
+        // Cap the raster at ~64 megapixels so huge pages (posters, plans) still print.
+        let px_scale = (64e6 / ((w_pt as f64 * render_dpi / 72.0) * (h_pt as f64 * render_dpi / 72.0)).max(1.0)).sqrt().min(1.0);
+        let rw = (w_pt as f64 * render_dpi / 72.0 * px_scale).round().max(1.0) as i32;
+        let rh = (h_pt as f64 * render_dpi / 72.0 * px_scale).round().max(1.0) as i32;
         let form = doc.form.as_ref();
         let Some(bmp) = super::render::with_temp_page(&doc.pdf, form, i, |p| super::render::render(p, form, 0, 0, rw, rh, rw, rh)).flatten() else {
             unsafe { AbortDoc(hdc) };

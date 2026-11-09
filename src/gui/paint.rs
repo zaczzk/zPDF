@@ -69,10 +69,15 @@ fn tile_range(page: RECT, view: RECT) -> Option<(std::ops::Range<i32>, std::ops:
 fn render_tile(app: &mut App, page: usize, tx: i32, ty: i32) {
     let (w, h) = (app.layouts[page].w, app.layouts[page].h);
     let Some(doc) = app.doc.as_mut() else { return };
-    let Some((p, form)) = doc.page_and_form(page) else { return };
+    let Some((p, form)) = doc.page_and_form(page) else {
+        app.cache.mark_failed(page);
+        return;
+    };
     let (x, y) = (tx * TILE, ty * TILE);
     if let Some(b) = render::render(p, form, x, y, TILE.min(w - x), TILE.min(h - y), w, h) {
         app.cache.put_tile((page, w, tx, ty), b);
+    } else {
+        app.cache.mark_failed(page);
     }
 }
 
@@ -92,6 +97,9 @@ pub fn render_pending(app: &mut App, deadline: Instant) -> bool {
     let view = app.view_rect();
     let mut remaining = false;
     for page in app.visible_pages() {
+        if app.cache.is_failed(page) {
+            continue;
+        }
         let Some(r) = app.page_rect(page) else { continue };
         let Some((xs, ys)) = tile_range(r, view) else { continue };
         let w = app.layouts[page].w;
@@ -139,7 +147,7 @@ fn paint_pages(app: &mut App, cv: &mut Canvas) {
         cv.fill(r, rgb(255, 255, 255));
         let w = app.layouts[page].w;
         let Some((xs, ys)) = tile_range(r, view) else { continue };
-        let complete = ys.clone().all(|ty| xs.clone().all(|tx| app.cache.has_tile((page, w, tx, ty))));
+        let complete = app.cache.is_failed(page) || ys.clone().all(|ty| xs.clone().all(|tx| app.cache.has_tile((page, w, tx, ty))));
         if !complete {
             missing = true;
             ensure_preview(app, page);

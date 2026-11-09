@@ -371,11 +371,15 @@ impl<'a> Canvas<'a> {
     /// Soft drop shadow: a few stacked translucent frames.
     pub fn shadow(&self, r: RECT, spread: i32) {
         let c = self.t.shadow;
-        for i in 1..=spread.max(1) {
+        let spread = spread.max(1);
+        // Each ring is shortened at the ends so the corners taper diagonally instead of
+        // showing square blocks around rounded cards.
+        for i in 1..=spread {
             let a = (60 / i).max(8) as u8;
-            self.blend(RECT::new(r.left - i + 1, r.bottom + i - 1, r.right + i - 1, r.bottom + i), c, a);
-            self.blend(RECT::new(r.right + i - 1, r.top - i + 2, r.right + i, r.bottom + i), c, a);
-            self.blend(RECT::new(r.left - i, r.top - i + 2, r.left - i + 1, r.bottom + i), c, a / 2);
+            let k = spread - i + 1;
+            self.blend(RECT::new(r.left + k, r.bottom + i - 1, r.right - k, r.bottom + i), c, a);
+            self.blend(RECT::new(r.right + i - 1, r.top + k + 2, r.right + i, r.bottom - k), c, a);
+            self.blend(RECT::new(r.left - i, r.top + k + 2, r.left - i + 1, r.bottom - k), c, a / 2);
         }
     }
 }
