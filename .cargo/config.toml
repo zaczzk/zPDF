@@ -1,8 +1,12 @@
-[build]
-target = "aarch64-pc-windows-gnullvm"
+# Icon, VERSIONINFO and manifest are compiled and linked by build.rs for every Windows target.
+# No default [build] target: pass --target, or set one in your user-level ~/.cargo/config.toml.
+
+# Static C runtime so release exes need no VC++ redistributable / libunwind.dll beside them.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-pc-windows-gnullvm]
-rustflags = ["-C", "link-arg=-static", "-C", "link-arg=resources_arm64.o"]
+rustflags = ["-C", "link-arg=-static"]
 
 [target.x86_64-pc-windows-gnullvm]
-rustflags = ["-C", "link-arg=-static", "-C", "link-arg=resources_x64.o"]
+rustflags = ["-C", "link-arg=-static"]

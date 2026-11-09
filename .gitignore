@@ -3,6 +3,8 @@
 *.pdb
 *.obj
 *.exe
+*.o
+*.res
 !build/**/*.exe
 .vscode/
 .idea/
@@ -11,8 +13,11 @@ libunwind.dll
 
 sample.pdf
 
-# dist/ is committed on purpose: the prebuilt 1.1.0 binaries live there.
-!dist/*.zip
-!dist/*.exe
+# Release binaries live on GitHub Releases (with SHA256SUMS.txt), never in git.
+/dist/*
+!/dist/README.md
+/stage/
+*.zip
+*.tgz
 # local review decisions, never shipped
 adversarial_review.json

@@ -6,8 +6,12 @@
   #define Arch "x64"
 #endif
 
+; The version comes from Cargo.toml, passed by CI: ISCC /DArch=x64 /DMyAppVersion=1.2.3 installer.iss
+#ifndef MyAppVersion
+  #error MyAppVersion is not defined. Pass /DMyAppVersion=<version from Cargo.toml> to ISCC.
+#endif
+
 #define MyAppName "zPDF"
-#define MyAppVersion "1.1.5"
 #define MyAppPublisher "zPDF"
 #define MyAppURL "https://github.com/zaczzk/zpdf"
 #define MyAppExeName "zpdf.exe"
@@ -64,6 +68,8 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
+; Must match src/default_app.rs (register_at), which writes the same keys for `zpdf --register`.
+; The .pdf default value is deliberately NOT written: the user picks the default in Settings.
 ; ProgID definition
 Root: HKA; Subkey: "Software\Classes\zPDF.Document"; ValueType: string; ValueName: ""; ValueData: "zPDF Document"; Flags: uninsdeletekey; Tasks: associatepdf
 Root: HKA; Subkey: "Software\Classes\zPDF.Document\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletekey; Tasks: associatepdf
@@ -74,20 +80,23 @@ Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExeName}\DefaultIcon"; 
 Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExeName}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey; Tasks: associatepdf
 Root: HKA; Subkey: "Software\Classes\Applications\{#MyAppExeName}\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""; Flags: uninsdeletekey; Tasks: associatepdf
 
-; Direct .pdf extension association & icon fallback
-Root: HKA; Subkey: "Software\Classes\.pdf"; ValueType: string; ValueName: ""; ValueData: "zPDF.Document"; Flags: uninsdeletevalue; Tasks: associatepdf
-Root: HKA; Subkey: "Software\Classes\.pdf"; ValueType: string; ValueName: "Content Type"; ValueData: "application/pdf"; Flags: uninsdeletevalue; Tasks: associatepdf
-Root: HKA; Subkey: "Software\Classes\.pdf"; ValueType: string; ValueName: "PerceivedType"; ValueData: "document"; Flags: uninsdeletevalue; Tasks: associatepdf
-Root: HKA; Subkey: "Software\Classes\.pdf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"; Flags: uninsdeletevalue; Tasks: associatepdf
+; Offer zPDF in "Open with" for .pdf
 Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "zPDF.Document"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associatepdf
 ; Windows Default Programs Capabilities registration
 Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: "Software\{#MyAppName}\Capabilities"; Flags: uninsdeletevalue; Tasks: associatepdf
 Root: HKA; Subkey: "Software\{#MyAppName}\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Fast, zero-overhead PDF viewer and editor."; Flags: uninsdeletekey; Tasks: associatepdf
 Root: HKA; Subkey: "Software\{#MyAppName}\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#MyAppName}"; Flags: uninsdeletekey; Tasks: associatepdf
 Root: HKA; Subkey: "Software\{#MyAppName}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "zPDF.Document"; Flags: uninsdeletekey; Tasks: associatepdf
+; Per-user settings written by the app (NeverAskDefault): removed on uninstall.
+Root: HKCU; Subkey: "Software\{#MyAppName}"; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Removes per-user registrations the app made itself (in-app "Set default" banner or
+; `zpdf --register`), e.g. when the associatepdf task was left unchecked. Registry only.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--unregister"; Flags: runhidden waituntilterminated; RunOnceId: "zPDFUnregister"
 
 
 [Code]

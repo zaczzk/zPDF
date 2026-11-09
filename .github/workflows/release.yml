@@ -6,11 +6,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
-  # Pinned so a public build is reproducible: pdfium binaries from bblanchon/pdfium-binaries.
+  # pdfium binaries from bblanchon/pdfium-binaries, pinned by tag AND by archive SHA-256
+  # (GitHub's asset digests for that release). Changing PDFIUM_TAG without updating both hashes
+  # fails the build: never ship a renderer nobody checked.
   PDFIUM_TAG: chromium/8125
+  PDFIUM_SHA256_x64: 9a964261760cff52570aabf038ab346d3a5034dd8b30d0d5fe8861235d356b8b
+  PDFIUM_SHA256_arm64: d394ba61991fb53f4d87f70988035f337d9e73f2bd2c3c1b966df8c43fcabb05
+  # build.rs fails instead of producing an exe without icon/VERSIONINFO/manifest.
+  ZPDF_REQUIRE_RESOURCES: "1"
 
 jobs:
   build:
@@ -23,76 +29,86 @@ jobs:
           - target: aarch64-pc-windows-msvc
             arch: arm64
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
 
       - name: Toolchain
         run: |
-          rustup target add ${{ matrix.target }}
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
 
-      - name: Version metadata consistent
-        shell: pwsh
-        run: ./scripts/check-versions.ps1
-
-      - name: PDFium
-        shell: pwsh
+      - name: Version (and tag == v<Cargo.toml version>)
+        id: version
         run: |
+          $tag = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' } else { '' }
+          $v = ./scripts/check-versions.ps1 -Tag $tag
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Test
+        if: matrix.arch == 'x64' # the runner is x64; arm64 test binaries cannot run on it
+        run: cargo test --release --locked --target ${{ matrix.target }}
+
+      - name: PDFium (pinned, SHA-256 verified)
+        run: |
+          $arch = '${{ matrix.arch }}'
+          $expected = [Environment]::GetEnvironmentVariable("PDFIUM_SHA256_$arch")
+          if ($expected -notmatch '^[0-9a-f]{64}$') { throw "PDFIUM_SHA256_$arch is not a SHA-256 hex digest" }
           $tag = $env:PDFIUM_TAG -replace '/', '%2F'
-          $url = "https://github.com/bblanchon/pdfium-binaries/releases/download/$tag/pdfium-win-${{ matrix.arch }}.tgz"
+          $url = "https://github.com/bblanchon/pdfium-binaries/releases/download/$tag/pdfium-win-$arch.tgz"
           curl.exe -fsSL -o pdfium.tgz $url
-          if (!(Test-Path pdfium.tgz) -or (Get-Item pdfium.tgz).Length -lt 100000) { throw "pdfium download failed: $url" }
-          tar -xzf pdfium.tgz
-          $dll = Get-ChildItem -Recurse -Filter pdfium.dll | Select-Object -First 1
-          if (-not $dll) { throw "pdfium.dll missing inside pdfium-win-${{ matrix.arch }}.tgz" }
-          Copy-Item $dll.FullName "pdfium-${{ matrix.arch }}.dll"
-          Get-FileHash "pdfium-${{ matrix.arch }}.dll" -Algorithm SHA256 | Format-List
+          if ($LASTEXITCODE -ne 0) { throw "pdfium download failed: $url" }
+          $actual = (Get-FileHash pdfium.tgz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "pdfium-win-$arch.tgz SHA-256 mismatch: expected $expected, got $actual" }
+          New-Item -ItemType Directory -Force -Path pdfium-extract | Out-Null
+          tar -xzf pdfium.tgz -C pdfium-extract
+          if ($LASTEXITCODE -ne 0) { throw 'pdfium archive extraction failed' }
+          $dll = @(Get-ChildItem pdfium-extract -Recurse -Filter pdfium.dll)
+          if ($dll.Count -ne 1) { throw "expected exactly one pdfium.dll in pdfium-win-$arch.tgz, found $($dll.Count)" }
+          Copy-Item $dll[0].FullName "pdfium-$arch.dll"
+          "pdfium.dll sha256: $((Get-FileHash "pdfium-$arch.dll" -Algorithm SHA256).Hash)"
 
       - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Resources embedded
         run: |
-          cargo build --release --locked --target ${{ matrix.target }}
+          $exe = 'target/${{ matrix.target }}/release/zpdf.exe'
+          $got = (Get-Item $exe).VersionInfo.ProductVersion
+          if ($got -ne '${{ steps.version.outputs.version }}') { throw "zpdf.exe ProductVersion is '$got', expected '${{ steps.version.outputs.version }}'" }
 
       - name: Package
-        shell: pwsh
         run: |
           $stage = "stage/zPDF-${{ matrix.arch }}"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/zpdf.exe" "$stage/zPDF.exe"
-          Copy-Item "README.md", "LICENSE" "$stage"
-          if (Test-Path "pdfium-${{ matrix.arch }}.dll") {
-            Copy-Item "pdfium-${{ matrix.arch }}.dll" "$stage/pdfium.dll"
-          } elseif (Test-Path "pdfium.dll") {
-            Copy-Item "pdfium.dll" "$stage/pdfium.dll"
-          } else {
-            # Never ship a package without the renderer: the app cannot open a PDF without it.
-            throw "pdfium.dll not staged - refusing to build an unusable package"
-          }
+          Copy-Item "pdfium-${{ matrix.arch }}.dll" "$stage/pdfium.dll"
+          Copy-Item README.md, LICENSE $stage
           Compress-Archive -Path "$stage/*" -DestinationPath "zPDF-${{ matrix.arch }}.zip"
 
+      - name: Self-test packaged exe
+        if: matrix.arch == 'x64'
+        run: |
+          $p = Start-Process -FilePath "stage/zPDF-x64/zPDF.exe" -ArgumentList '--self-test' -PassThru -NoNewWindow
+          $null = $p.Handle # keeps ExitCode readable after exit
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw 'self-test timed out' }
+          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+
       - name: Installer (Inno Setup)
-        shell: pwsh
         run: |
           choco install innosetup --no-progress -y | Out-Null
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          & $iscc "/DArch=${{ matrix.arch }}" installer.iss
-          if (!(Test-Path "zPDF-Setup-${{ matrix.arch }}.exe")) { throw "installer not produced" }
-
-      # Signing: enable once SignPath Foundation approves the project (free for OSS).
-      # The action submits an unsigned request, SignPath returns the signed artifact.
-      # - name: Sign (SignPath Foundation)
-      #   uses: signpath/github-action-submit-signing-request@v1
-      #   with:
-      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-      #     organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-      #     project-slug: zpdf
-      #     signing-policy-slug: release-signing
-      #     github-artifact-id: ${{ steps.artifact.outputs.artifact-id }}
-      #     wait-for-completion: true
-      #     output-artifact-directory: signed/
+          & $iscc "/DArch=${{ matrix.arch }}" "/DMyAppVersion=${{ steps.version.outputs.version }}" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          if (!(Test-Path "zPDF-Setup-${{ matrix.arch }}.exe")) { throw 'installer not produced' }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: zPDF-${{ matrix.arch }}
+          if-no-files-found: error
           path: |
             zPDF-${{ matrix.arch }}.zip
             zPDF-Setup-${{ matrix.arch }}.exe
@@ -101,15 +117,28 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
+      - name: Checksums
+        run: |
+          Get-ChildItem dist -File | Where-Object { $_.Extension -in '.zip', '.exe' } | Sort-Object Name |
+            ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" } |
+            Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.zip
             dist/*.exe
+            dist/SHA256SUMS.txt
           generate_release_notes: true

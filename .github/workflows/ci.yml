@@ -1,0 +1,44 @@
+name: ci
+
+# Every push to the default branch (main or master) and every PR: Cargo.lock in sync with
+# Cargo.toml, the test suite, and a release build that must embed its resources.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ZPDF_REQUIRE_RESOURCES: "1"
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+          rustup default stable
+
+      - name: Version (Cargo.lock matches Cargo.toml)
+        run: ./scripts/check-versions.ps1
+
+      - name: Test
+        run: cargo test --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Resources embedded
+        run: |
+          $want = ./scripts/check-versions.ps1
+          $got = (Get-Item target/x86_64-pc-windows-msvc/release/zpdf.exe).VersionInfo.ProductVersion
+          if ($got -ne $want) { throw "zpdf.exe ProductVersion is '$got', expected '$want' (resources not linked?)" }
