@@ -58,6 +58,13 @@ pub enum EditAction {
         width_pt: f64,
         height_pt: f64,
     },
+    /// A page object translated by (dx, dy) PDF points; undo moves it back.
+    MoveObject {
+        page_index: usize,
+        object_index: usize,
+        dx: f64,
+        dy: f64,
+    },
     DocumentSnapshot {
         before_bytes: Vec<u8>,
         after_bytes: Vec<u8>,
@@ -286,6 +293,14 @@ pub fn apply_text_mutation(doc: &PdfDocument, page_index: usize, object_index: u
     if !obj.set_text(new_text) {
         return Err("Failed to set text on PDF text object".to_string());
     }
+    commit(&page).map(|_| ())
+}
+
+/// Translates a page object by (dx, dy) PDF points and regenerates the content stream.
+pub fn move_page_object(doc: &PdfDocument, page_index: usize, object_index: usize, dx: f64, dy: f64) -> Result<(), String> {
+    let page = doc.load_page(page_index)?;
+    let obj = page.get_object(object_index).ok_or_else(|| "Object not found on page".to_string())?;
+    obj.transform(1.0, 0.0, 0.0, 1.0, dx, dy);
     commit(&page).map(|_| ())
 }
 

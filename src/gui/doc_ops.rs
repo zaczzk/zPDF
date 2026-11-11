@@ -235,6 +235,7 @@ fn action_page(a: &EditAction) -> Option<usize> {
         | EditAction::InsertTextRun { page_index, .. }
         | EditAction::InsertImage { page_index, .. }
         | EditAction::InsertStamp { page_index, .. }
+        | EditAction::MoveObject { page_index, .. }
         | EditAction::HighlightAnnot { page_index, .. } => Some(*page_index),
         _ => None,
     }
@@ -257,6 +258,10 @@ fn apply(app: &mut App, a: &mut EditAction, forward: bool) -> Result<(), String>
         EditAction::RotatePage { page_index, old_rotation, new_rotation } => {
             let page = pdf.load_page(*page_index)?;
             page.set_rotation(if forward { *new_rotation } else { *old_rotation });
+        }
+        EditAction::MoveObject { page_index, object_index, dx, dy } => {
+            let s = if forward { 1.0 } else { -1.0 };
+            editor::move_page_object(pdf, *page_index, *object_index, *dx * s, *dy * s)?;
         }
         EditAction::EditTextRun { page_index, object_index, old_text, new_text } => {
             editor::apply_text_mutation(pdf, *page_index, *object_index, if forward { new_text } else { old_text })?;
@@ -583,6 +588,21 @@ unsafe extern "system" fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
     }
     CallWindowProcW(OLD_EDIT_PROC, hwnd, msg, wparam, lparam)
+}
+
+/// Moves a text run by (dx, dy) PDF points (a drag with the Edit tool).
+pub fn move_text(app: &mut App, page: usize, object: usize, dx: f64, dy: f64) {
+    if dx == 0.0 && dy == 0.0 {
+        return;
+    }
+    let Some(doc) = &app.doc else { return };
+    match editor::move_page_object(&doc.pdf, page, object, dx, dy) {
+        Ok(()) => {
+            record(app, EditAction::MoveObject { page_index: page, object_index: object, dx, dy });
+            app.page_changed(page);
+        }
+        Err(e) => app.toast(format!("Couldn't move text: {e}"), ToastKind::Error),
+    }
 }
 
 /// Opens the in-place editor over the text run at (x, y), or a new run if there is none.

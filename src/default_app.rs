@@ -316,10 +316,13 @@ fn register_at(root: &str, exe: &Path) -> Result<(), String> {
 
     let prog_id = format!("{classes}\\{PROG_ID}");
     reg_set_string(&prog_id, None, "zPDF Document")?;
+    reg_set_string(&prog_id, Some("FriendlyTypeName"), "zPDF Document")?;
     reg_set_string(&format!("{prog_id}\\DefaultIcon"), None, &icon)?;
     reg_set_string(&format!("{prog_id}\\shell\\open\\command"), None, &open_command)?;
 
     let app = format!("{classes}\\Applications\\{APP_EXE}");
+    // The name "Open with" shows; without it Windows falls back to the exe's description.
+    reg_set_string(&app, Some("FriendlyAppName"), APP_NAME)?;
     reg_set_string(&format!("{app}\\DefaultIcon"), None, &icon)?;
     reg_set_string(&format!("{app}\\shell\\open\\command"), None, &open_command)?;
     reg_set_string(&format!("{app}\\SupportedTypes"), Some(".pdf"), "")?;

@@ -208,6 +208,17 @@ fn paint_page_overlays(app: &mut App, cv: &mut Canvas, page: usize) {
             cv.blend(r, t.selection, 80);
         }
     }
+    // Text run being moved: show where it will land.
+    if let Drag::MoveText { page: p, bounds, from, to, moved: true, .. } = app.drag {
+        if p == page {
+            let (dx, dy) = ((to.0 - from.0) as f32, (to.1 - from.1) as f32);
+            let b = crate::pdfium::RectF { left: bounds.left + dx, right: bounds.right + dx, bottom: bounds.bottom + dy, top: bounds.top + dy };
+            if let Some(r) = app.rect_to_screen(page, b) {
+                cv.blend(r, t.accent, 40);
+                cv.frame(r, t.accent, cv.s(2));
+            }
+        }
+    }
     // Drag rectangles
     let drag = match app.drag {
         Drag::Select { page: p, from, to, anchor: None } if p == page => Some((from, to, false)),

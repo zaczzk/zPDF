@@ -89,6 +89,9 @@ pub enum Drag {
     Select { page: usize, from: (f64, f64), to: (f64, f64), anchor: Option<usize> },
     Redact { page: usize, from: (f64, f64), to: (f64, f64) },
     Gizmo { handle: Handle, mouse: (i32, i32), orig: (f64, f64, f64, f64) },
+    /// Edit tool: a press on an existing text run. Without real movement the release opens the
+    /// in-place editor (`down` is where it was pressed); with movement it moves the run.
+    MoveText { page: usize, object: usize, bounds: RectF, from: (f64, f64), to: (f64, f64), down: (i32, i32), moved: bool },
     /// A press that PDFium's form layer consumed; the release goes there too.
     Form { page: usize },
 }

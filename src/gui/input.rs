@@ -539,7 +539,22 @@ fn on_left_down(app: &mut App, x: i32, y: i32) {
             }
             app.invalidate();
         }
-        Tool::Edit => doc_ops::begin_text_edit(app, x, y),
+        Tool::Edit => {
+            doc_ops::commit_editor(app);
+            // A press on an existing run is either a click (edit it) or a drag (move it); the
+            // release decides. Anywhere else starts a new run straight away.
+            let hit = pt.and_then(|(p, (px, py))| {
+                let page = app.doc.as_mut().and_then(|d| d.page(p))?;
+                crate::editor::hit_test_text_object(page, px as f32, py as f32, 4.0).map(|(obj, _, b)| (p, obj, b, (px, py)))
+            });
+            match hit {
+                Some((p, object, bounds, from)) => {
+                    app.drag = Drag::MoveText { page: p, object, bounds, from, to: from, down: (x, y), moved: false };
+                    capture(app);
+                }
+                None => doc_ops::begin_text_edit(app, x, y),
+            }
+        }
         Tool::StampCheck | Tool::StampCross => {
             if let Some((p, (px, py))) = pt {
                 doc_ops::place_stamp(app, p, px, py, app.tool == Tool::StampCheck);
@@ -596,6 +611,16 @@ fn on_mouse_move(app: &mut App, x: i32, y: i32) {
             return;
         }
         Drag::Gizmo { handle, mouse, orig } => return drag_gizmo(app, handle, mouse, orig, x, y),
+        Drag::MoveText { page, object, bounds, from, to, down, moved } => {
+            // A press only becomes a move once the pointer really travels.
+            let moved = moved || (x - down.0).abs().max((y - down.1).abs()) > app.s(4);
+            let to = if moved { app.to_pdf_clamped(page, x, y).unwrap_or(to) } else { to };
+            app.drag = Drag::MoveText { page, object, bounds, from, to, down, moved };
+            if moved {
+                app.invalidate();
+            }
+            return;
+        }
         Drag::Form { page } => {
             if let Some((px, py)) = app.to_pdf(page, x, y) {
                 with_form_page(app, page, |f, p| f.on_mouse_move(p, form_mods(), px, py));
@@ -678,6 +703,13 @@ fn on_left_up(app: &mut App, x: i32, y: i32) {
             let r = norm(from, to);
             if r.right - r.left > 3.0 && r.top - r.bottom > 3.0 {
                 doc_ops::redact(app, page, r);
+            }
+        }
+        Drag::MoveText { page, object, from, to, down, moved, .. } => {
+            if moved {
+                doc_ops::move_text(app, page, object, to.0 - from.0, to.1 - from.1);
+            } else {
+                doc_ops::begin_text_edit(app, down.0, down.1);
             }
         }
         Drag::Form { page } => {
@@ -802,7 +834,7 @@ fn cursor_for(app: &mut App, x: i32, y: i32) -> usize {
             Handle::Move => IDC_SIZEALL,
         };
     }
-    if matches!(app.drag, Drag::Pan { .. }) {
+    if matches!(app.drag, Drag::Pan { .. } | Drag::MoveText { moved: true, .. }) {
         return IDC_SIZEALL;
     }
     if app.page_at(x, y).is_none() {
